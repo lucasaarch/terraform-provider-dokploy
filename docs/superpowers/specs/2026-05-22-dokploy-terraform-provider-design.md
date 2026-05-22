@@ -208,7 +208,7 @@ Suporta o bloco padrão `timeouts` (`create`, `update`), default 10 minutos.
 | `application_id` | string, **obrigatório** | referencia `dokploy_application.x.id` |
 | `host` | string, **obrigatório** | hostname, ex: `app.exemplo.com` |
 | `path` | string, opcional | default `/` |
-| `port` | number, opcional | porta do container para rotear |
+| `port` | number, **obrigatório** | porta do container para rotear (exigida pela API) |
 | `https` | bool, opcional | default `false` |
 | `certificate_type` | string, opcional | `none` ou `letsencrypt`, default `none` |
 | `id` | string, **computed** | `domainId` |

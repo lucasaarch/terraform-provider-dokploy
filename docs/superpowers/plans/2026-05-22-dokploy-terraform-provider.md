@@ -640,13 +640,11 @@ func TestCreateProject(t *testing.T) {
 		if body.Name != "web" {
 			t.Errorf("body = %+v", body)
 		}
-		_ = json.NewEncoder(w).Encode(Project{
-			ID: "p1", Name: "web", OrganizationID: "org1",
-			Environments: []Environment{
-				{ID: "env-prod", Name: "production", IsDefault: true},
-				{ID: "env-stg", Name: "staging", IsDefault: false},
-			},
-		})
+		// project.create returns a {project, environment} envelope.
+		_, _ = w.Write([]byte(`{
+			"project": {"projectId": "p1", "name": "web", "organizationId": "org1"},
+			"environment": {"environmentId": "env-prod", "name": "production", "isDefault": true}
+		}`))
 	}))
 	defer srv.Close()
 
@@ -724,12 +722,21 @@ type ProjectInput struct {
 	Description string `json:"description,omitempty"`
 }
 
+// CreateProject creates a project. The API returns a {project, environment}
+// envelope (the auto-created production environment is separate); this method
+// normalizes it into a Project with Environments populated, so callers can use
+// ProductionEnvironmentID() uniformly.
 func (c *Client) CreateProject(ctx context.Context, in ProjectInput) (*Project, error) {
-	var out Project
-	if err := c.do(ctx, http.MethodPost, "project.create", in, nil, &out); err != nil {
+	var raw struct {
+		Project     Project     `json:"project"`
+		Environment Environment `json:"environment"`
+	}
+	if err := c.do(ctx, http.MethodPost, "project.create", in, nil, &raw); err != nil {
 		return nil, err
 	}
-	return &out, nil
+	proj := raw.Project
+	proj.Environments = []Environment{raw.Environment}
+	return &proj, nil
 }
 
 func (c *Client) GetProject(ctx context.Context, id string) (*Project, error) {
@@ -1062,12 +1069,18 @@ func TestCreateApplication(t *testing.T) {
 		if r.URL.Path != "/api/application.create" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
+		var body ApplicationInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.AppName != "api" {
+			t.Errorf("appName = %q, want api (required by the API)", body.AppName)
+		}
 		_ = json.NewEncoder(w).Encode(Application{ID: "app1", Name: "api", AppName: "api-abc123"})
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, "secret")
-	app, err := c.CreateApplication(context.Background(), ApplicationInput{Name: "api", EnvironmentID: "env1"})
+	app, err := c.CreateApplication(context.Background(),
+		ApplicationInput{Name: "api", AppName: "api", EnvironmentID: "env1"})
 	if err != nil {
 		t.Fatalf("CreateApplication() error = %v", err)
 	}
@@ -1184,20 +1197,26 @@ type Application struct {
 	Env               string `json:"env"`
 }
 
-// ApplicationInput is the create/update payload (identity fields only).
+// ApplicationInput is the application.create payload. appName is required by
+// the API; Dokploy appends a random suffix to it. For application.update only
+// Name/Description are sent (AppName/EnvironmentID omitted via omitempty).
 type ApplicationInput struct {
 	Name          string `json:"name"`
+	AppName       string `json:"appName,omitempty"`
 	Description   string `json:"description,omitempty"`
 	EnvironmentID string `json:"environmentId,omitempty"`
 }
 
-// DockerProviderInput configures the Docker image source.
+// DockerProviderInput configures the Docker image source. The API's Zod schema
+// requires registryUrl, username, and password to be present even for public
+// images — username/password are pointers so they serialize as JSON null when
+// unset, and registryUrl has no omitempty so it serializes as "".
 type DockerProviderInput struct {
-	ApplicationID string `json:"applicationId"`
-	DockerImage   string `json:"dockerImage"`
-	RegistryURL   string `json:"registryUrl,omitempty"`
-	Username      string `json:"username,omitempty"`
-	Password      string `json:"password,omitempty"`
+	ApplicationID string  `json:"applicationId"`
+	DockerImage   string  `json:"dockerImage"`
+	RegistryURL   string  `json:"registryUrl"`
+	Username      *string `json:"username"`
+	Password      *string `json:"password"`
 }
 
 func (c *Client) CreateApplication(ctx context.Context, in ApplicationInput) (*Application, error) {
@@ -1236,8 +1255,20 @@ func (c *Client) SaveDockerProvider(ctx context.Context, in DockerProviderInput)
 }
 
 // SaveEnvironment sets the application's environment variables (dotenv string).
+// The API's Zod schema requires buildArgs, buildSecrets, and createEnvFile to
+// be present; buildArgs/buildSecrets are sent as null, createEnvFile as true.
 func (c *Client) SaveEnvironment(ctx context.Context, applicationID, env string) error {
-	payload := map[string]string{"applicationId": applicationID, "env": env}
+	payload := struct {
+		ApplicationID string  `json:"applicationId"`
+		Env           string  `json:"env"`
+		BuildArgs     *string `json:"buildArgs"`
+		BuildSecrets  *string `json:"buildSecrets"`
+		CreateEnvFile bool    `json:"createEnvFile"`
+	}{
+		ApplicationID: applicationID,
+		Env:           env,
+		CreateEnvFile: true,
+	}
 	return c.do(ctx, http.MethodPost, "application.saveEnvironment", payload, nil, nil)
 }
 
@@ -1294,13 +1325,15 @@ type Domain struct {
 	ApplicationID   string `json:"applicationId"`
 }
 
-// DomainInput is the writable payload for create/update.
+// DomainInput is the writable payload for create/update. The API's Zod schema
+// requires host, port, https, path, and certificateType on create — none use
+// omitempty so they always serialize.
 type DomainInput struct {
 	Host            string `json:"host"`
-	Path            string `json:"path,omitempty"`
-	Port            int    `json:"port,omitempty"`
+	Path            string `json:"path"`
+	Port            int    `json:"port"`
 	HTTPS           bool   `json:"https"`
-	CertificateType string `json:"certificateType,omitempty"`
+	CertificateType string `json:"certificateType"`
 	ApplicationID   string `json:"applicationId,omitempty"`
 }
 
@@ -1483,9 +1516,15 @@ gofmt -w . ; git add internal/provider/provider.go internal/provider/provider_te
 
 ## Task 10: Organization data source
 
-The Dokploy API key is bound to one organization that cannot be created or
-modified. `dokploy_organization` is therefore a read-only data source exposing
-that organization.
+`dokploy_organization` is a read-only data source exposing a Dokploy
+organization (organizations cannot be created or modified via the API).
+
+**Verified against the live instance:** `organization.all` can return **more
+than one** organization for a single API key. The data source therefore takes
+an optional `name` argument:
+- `name` set → returns the organization with that exact name.
+- `name` omitted, exactly one org → returns it.
+- `name` omitted, multiple orgs → returns a clear error listing the names.
 
 **Files:**
 - Create: `internal/provider/organization_data_source.go`
@@ -1500,6 +1539,7 @@ that organization.
 package provider
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -1511,7 +1551,9 @@ func TestAccOrganizationDataSource(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: `data "dokploy_organization" "current" {}`,
+				// name is resolved at runtime so the test does not hardcode
+				// an instance-specific organization name.
+				Config: fmt.Sprintf(`data "dokploy_organization" "current" { name = %q }`, firstOrgName(t)),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet("data.dokploy_organization.current", "id"),
 					resource.TestCheckResourceAttrSet("data.dokploy_organization.current", "name"),
@@ -1522,15 +1564,20 @@ func TestAccOrganizationDataSource(t *testing.T) {
 }
 ```
 
-Create `internal/provider/helpers_test.go` with the shared `randInt` helper
-(used by acceptance tests in Tasks 11–14 and 17):
+Create `internal/provider/helpers_test.go` with shared test helpers (used by
+acceptance tests in Tasks 11–14 and 17):
 
 ```go
 package provider
 
 import (
+	"context"
 	"math/rand"
+	"os"
+	"testing"
 	"time"
+
+	"github.com/lucasaarch/terraform-provider-dokploy/internal/client"
 )
 
 var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -1538,6 +1585,22 @@ var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 // randInt returns a positive random int for unique acceptance-test names.
 func randInt() int {
 	return rng.Intn(1_000_000)
+}
+
+// firstOrgName returns the name of the first organization the API key can see.
+// Used to feed acceptance tests a valid organization name without hardcoding
+// an instance-specific value.
+func firstOrgName(t *testing.T) string {
+	t.Helper()
+	c := client.New(os.Getenv("DOKPLOY_ENDPOINT"), os.Getenv("DOKPLOY_API_KEY"))
+	orgs, err := c.ListOrganizations(context.Background())
+	if err != nil {
+		t.Fatalf("firstOrgName: ListOrganizations failed: %v", err)
+	}
+	if len(orgs) == 0 {
+		t.Fatal("firstOrgName: no organizations visible to the API key")
+	}
+	return orgs[0].Name
 }
 ```
 
@@ -1554,6 +1617,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -1588,15 +1652,16 @@ func (d *organizationDataSource) Metadata(_ context.Context, req datasource.Meta
 
 func (d *organizationDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The Dokploy organization the configured API key belongs to.",
+		MarkdownDescription: "A Dokploy organization. If the API key can see more than one organization, set `name` to select one.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Organization identifier.",
 			},
 			"name": schema.StringAttribute{
+				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Organization name.",
+				MarkdownDescription: "Organization name. Optional when the API key sees exactly one organization; required to disambiguate when it sees several.",
 			},
 			"slug": schema.StringAttribute{
 				Computed:            true,
@@ -1619,7 +1684,13 @@ func (d *organizationDataSource) Configure(_ context.Context, req datasource.Con
 	d.client = c
 }
 
-func (d *organizationDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
+func (d *organizationDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var config organizationDataSourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	orgs, err := d.client.ListOrganizations(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("Error reading organization", err.Error())
@@ -1631,11 +1702,39 @@ func (d *organizationDataSource) Read(ctx context.Context, _ datasource.ReadRequ
 		return
 	}
 
-	org := orgs[0]
+	names := make([]string, len(orgs))
+	for i, o := range orgs {
+		names[i] = o.Name
+	}
+
+	var chosen *client.Organization
+	if !config.Name.IsNull() && config.Name.ValueString() != "" {
+		want := config.Name.ValueString()
+		for i := range orgs {
+			if orgs[i].Name == want {
+				chosen = &orgs[i]
+				break
+			}
+		}
+		if chosen == nil {
+			resp.Diagnostics.AddError("Organization not found",
+				fmt.Sprintf("No organization named %q. Available: %s.", want, strings.Join(names, ", ")))
+			return
+		}
+	} else {
+		if len(orgs) > 1 {
+			resp.Diagnostics.AddError("Multiple organizations found",
+				fmt.Sprintf("The API key can see %d organizations (%s). Set the `name` argument to select one.",
+					len(orgs), strings.Join(names, ", ")))
+			return
+		}
+		chosen = &orgs[0]
+	}
+
 	state := organizationDataSourceModel{
-		ID:   types.StringValue(org.ID),
-		Name: types.StringValue(org.Name),
-		Slug: types.StringValue(org.Slug),
+		ID:   types.StringValue(chosen.ID),
+		Name: types.StringValue(chosen.Name),
+		Slug: types.StringValue(chosen.Slug),
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
@@ -2300,6 +2399,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -2422,6 +2522,36 @@ func (r *applicationResource) Configure(_ context.Context, req resource.Configur
 	r.client = c
 }
 
+// slugify turns an application name into a Docker-safe base name. Dokploy
+// appends its own random suffix, so this only needs to be a valid prefix.
+func slugify(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == ' ' || r == '_' || r == '-':
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		out = "app"
+	}
+	return out
+}
+
+// optionalString returns a pointer to the string value, or nil when the
+// attribute is null/unknown/empty — used for API fields that must serialize as
+// JSON null when unset.
+func optionalString(v types.String) *string {
+	if v.IsNull() || v.IsUnknown() || v.ValueString() == "" {
+		return nil
+	}
+	s := v.ValueString()
+	return &s
+}
+
 // configureAndDeploy applies docker provider config + env, triggers a deploy,
 // and waits for it to finish. Used by both Create and Update.
 func (r *applicationResource) configureAndDeploy(ctx context.Context, m *applicationModel, timeout time.Duration) error {
@@ -2431,8 +2561,8 @@ func (r *applicationResource) configureAndDeploy(ctx context.Context, m *applica
 		ApplicationID: id,
 		DockerImage:   m.DockerImage.ValueString(),
 		RegistryURL:   m.RegistryURL.ValueString(),
-		Username:      m.RegistryUsername.ValueString(),
-		Password:      m.RegistryPassword.ValueString(),
+		Username:      optionalString(m.RegistryUsername),
+		Password:      optionalString(m.RegistryPassword),
 	}); err != nil {
 		return fmt.Errorf("saving docker provider: %w", err)
 	}
@@ -2469,6 +2599,7 @@ func (r *applicationResource) Create(ctx context.Context, req resource.CreateReq
 
 	app, err := r.client.CreateApplication(ctx, client.ApplicationInput{
 		Name:          plan.Name.ValueString(),
+		AppName:       slugify(plan.Name.ValueString()),
 		Description:   plan.Description.ValueString(),
 		EnvironmentID: plan.EnvironmentID.ValueString(),
 	})
@@ -2735,8 +2866,8 @@ func (r *domainResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				MarkdownDescription: "Path prefix to route. Defaults to `/`.",
 			},
 			"port": schema.Int64Attribute{
-				Optional:            true,
-				MarkdownDescription: "Container port to route to.",
+				Required:            true,
+				MarkdownDescription: "Container port to route traffic to. Required by the Dokploy API.",
 			},
 			"https": schema.BoolAttribute{
 				Optional:            true,
@@ -3269,7 +3400,9 @@ import (
 func TestAccEndToEnd(t *testing.T) {
 	suffix := randInt()
 	config := fmt.Sprintf(`
-data "dokploy_organization" "e2e" {}
+data "dokploy_organization" "e2e" {
+  name = %q
+}
 
 resource "dokploy_project" "e2e" {
   name           = "tf-acc-e2e-proj-%d"
@@ -3293,7 +3426,7 @@ resource "dokploy_domain" "e2e" {
   application_id = dokploy_application.e2e.id
   host           = "tf-acc-e2e-%d.example.com"
   port           = 80
-}`, suffix, suffix)
+}`, firstOrgName(t), suffix, suffix)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
