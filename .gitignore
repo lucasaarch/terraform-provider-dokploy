@@ -3,3 +3,4 @@
 .terraform/
 terraform-provider-dokploy
 dist/
+.dokploy-test-env
