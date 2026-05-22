@@ -12,12 +12,22 @@ organização até uma aplicação Docker no ar com domínio.
 
 ## Escopo da v1
 
-Cinco recursos, cobrindo o grafo completo de deploy:
+Quatro recursos gerenciáveis + um data source, cobrindo o grafo completo de
+deploy:
 
 ```
-dokploy_organization → dokploy_project → dokploy_environment
-                                       → dokploy_application (Docker) → dokploy_domain
+dokploy_organization (data source, somente leitura)
+        │ referenciado por
+        ▼
+dokploy_project → dokploy_environment
+                → dokploy_application (Docker) → dokploy_domain
 ```
+
+**Sobre a organização:** a API key do Dokploy é amarrada a uma organização
+existente — não é possível criar, alterar ou destruir organizações via API.
+Logo, `dokploy_organization` é um **data source** (somente leitura) que expõe a
+organização da API key. Os projetos são criados automaticamente nessa
+organização.
 
 **Fora de escopo na v1** (versões futuras): bancos de dados (Postgres/MySQL/
 MariaDB/Mongo/Redis), Compose services, Servers, Registries, integração com
@@ -54,7 +64,7 @@ terraform-provider-dokploy/
 ├── internal/
 │   ├── provider/
 │   │   ├── provider.go            # config do provider (endpoint, api_key)
-│   │   ├── organization_resource.go
+│   │   ├── organization_data_source.go
 │   │   ├── project_resource.go
 │   │   ├── environment_resource.go
 │   │   ├── application_resource.go
@@ -105,8 +115,8 @@ A API do Dokploy é RPC sobre HTTP: mutações são `POST` com corpo JSON
 
 **Arquivos por recurso** expõem métodos tipados:
 
-- `organization.go`: `CreateOrganization`, `GetOrganization`,
-  `UpdateOrganization`, `DeleteOrganization`
+- `organization.go`: `ListOrganizations` (lê `organization.all`; a API key
+  enxerga exatamente uma organização)
 - `project.go`: `CreateProject`, `GetProject`, `UpdateProject`, `DeleteProject`
 - `environment.go`: `CreateEnvironment`, `GetEnvironment`, `UpdateEnvironment`,
   `DeleteEnvironment`
@@ -115,26 +125,29 @@ A API do Dokploy é RPC sobre HTTP: mutações são `POST` com corpo JSON
   `DeployApplication`, `GetApplicationStatus`
 - `domain.go`: `CreateDomain`, `GetDomain`, `UpdateDomain`, `DeleteDomain`
 
-**Verificação na implementação:** os nomes exatos dos endpoints e o formato dos
-payloads serão confirmados contra o `/swagger` da instância real do usuário no
-**primeiro passo** do plano de implementação. O spec assume os nomes prováveis;
-divergências são tratadas no início.
+**Verificação na implementação:** os nomes de endpoint e formatos de payload
+foram parcialmente verificados contra a instância real (`project.all`,
+`organization.all`) e o restante é confirmado no primeiro passo do plano. Fatos
+já confirmados: a API responde em `<endpoint>/api/<router>.<método>`; projeto
+tem `projectId`, `organizationId`, `environments[]`; environment tem
+`environmentId`, `name`, `isDefault` (bool — `true` no environment de produção);
+organização (de `organization.all`) tem `id`, `name`, `slug`.
 
-## Recursos
+## Data sources
 
 ### `dokploy_organization`
 
-Nível mais alto de tenancy. Projetos vivem dentro de uma organização.
+Data source somente leitura. Expõe a organização à qual a API key pertence.
+A API key vê exatamente uma organização, então o data source não exige
+argumentos de entrada — lê `organization.all` e retorna a organização única.
 
 | Atributo | Tipo | Notas |
 |---|---|---|
-| `name` | string, **obrigatório** | nome da organização |
-| `id` | string, **computed** | `organizationId` |
+| `id` | string, **computed** | identificador da organização |
+| `name` | string, **computed** | nome da organização |
+| `slug` | string, **computed** | slug da organização (pode ser vazio) |
 
-**Destroy:** o comportamento de remoção será verificado contra a API real — o
-Dokploy pode bloquear a remoção da organização ativa ou da última organização
-do usuário. Nesse caso o recurso retorna um erro claro em vez de falhar de
-forma obscura.
+## Recursos
 
 ### `dokploy_project`
 
@@ -142,10 +155,10 @@ forma obscura.
 |---|---|---|
 | `name` | string, **obrigatório** | |
 | `description` | string, opcional | |
-| `organization_id` | string, opcional + **computed** | se informado, cria o projeto nessa organização; se omitido, usa a organização padrão da `api_key` e lê o valor de volta |
+| `organization_id` | string, **computed** | organização do projeto — preenchida automaticamente (a API key define a organização; não é configurável) |
 | `production_env` | map(string), opcional | variáveis de ambiente compartilhadas do environment `production` (criado automaticamente com o projeto) |
 | `id` | string, **computed** | `projectId` |
-| `production_environment_id` | string, **computed** | ID do environment `production` |
+| `production_environment_id` | string, **computed** | ID do environment `production` (o environment com `isDefault = true`) |
 
 **Nota sobre o environment `production`:** todo projeto Dokploy nasce com um
 environment `production`. Seu nome e descrição são fixos (não editáveis pela
@@ -244,12 +257,12 @@ provavelmente não volta no `application.one`. O Read **não sobrescreve** esse
 campo com o valor da API; mantém o do state/config. Consequência documentada:
 drift em `registry_password` feito fora do Terraform não é detectado.
 
-**Import** — os 5 recursos suportam `terraform import` pelo ID nativo do
-Dokploy. O Read preenche todos os atributos a partir do `*.one`, então o import
-não exige informar atributos pai à mão:
+**Import** — os 4 recursos gerenciáveis suportam `terraform import` pelo ID
+nativo do Dokploy. O Read preenche todos os atributos a partir do `*.one`, então
+o import não exige informar atributos pai à mão. (`dokploy_organization` é um
+data source — não tem import.)
 
 ```
-terraform import dokploy_organization.org  <organizationId>
 terraform import dokploy_project.app       <projectId>
 terraform import dokploy_environment.stg   <environmentId>
 terraform import dokploy_application.api   <applicationId>
@@ -272,9 +285,9 @@ do framework de testes do Terraform. Para cada recurso:
 - `import` (importa e confirma que o state bate)
 - `CheckDestroy` (confirma remoção no Dokploy após o destroy)
 
-Um teste end-to-end monta o grafo completo (organization → project →
-environment → application Docker → domain) com deploy real e destrói tudo ao
-final.
+Um teste end-to-end monta o grafo completo (data source `dokploy_organization`
+→ project → environment → application Docker → domain) com deploy real e
+destrói tudo ao final.
 
 **Separação:** testes unitários rodam em todo PR; testes de aceitação rodam sob
 demanda / em job protegido (consomem recursos reais e precisam dos segredos).
@@ -304,13 +317,10 @@ provider "dokploy" {
   # api_key via env DOKPLOY_API_KEY
 }
 
-resource "dokploy_organization" "main" {
-  name = "minha-empresa"
-}
+data "dokploy_organization" "current" {}
 
 resource "dokploy_project" "app" {
-  name            = "minha-app"
-  organization_id = dokploy_organization.main.id
+  name = "minha-app"
   production_env = {
     LOG_LEVEL = "info"
   }
@@ -345,11 +355,13 @@ resource "dokploy_domain" "web" {
 
 ## Riscos e itens a verificar na implementação
 
-1. **Nomes de endpoints e payloads** — confirmar contra o `/swagger` da
-   instância real no primeiro passo do plano.
+1. **Nomes de endpoints e payloads de mutação** — `project.all` e
+   `organization.all` já confirmados. Falta confirmar `*.create`/`*.update`/
+   `*.remove` de project, environment, application, domain e os endpoints
+   `application.saveDockerProvider`/`saveEnvironment`/`deploy`.
 2. **Router `environment.*`** — confirmar que existe e seu formato.
 3. **Campo de status do deploy** — confirmar os valores possíveis
    (`idle`/`running`/`done`/`error` ou outros) e qual endpoint os expõe.
-4. **`organization.delete`** — confirmar se a API bloqueia remoção da org ativa.
-5. **`registry_password` no read** — confirmar se a API retorna ou omite o
+   `applicationStatus` já visto em `project.all` com valor `done`.
+4. **`registry_password` no read** — confirmar se a API retorna ou omite o
    campo, ajustando a lógica de drift conforme.

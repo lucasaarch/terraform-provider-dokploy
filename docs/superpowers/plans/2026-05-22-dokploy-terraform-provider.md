@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a Terraform provider for Dokploy with 5 resources (organization, project, environment, application, domain) that automates a full Docker-based deployment graph.
+**Goal:** Build a Terraform provider for Dokploy with 4 managed resources (project, environment, application, domain) plus an `organization` data source, automating a full Docker-based deployment graph.
+
+**Important constraint:** The Dokploy API key is bound to a single existing organization — organizations cannot be created, updated, or deleted via the API. `dokploy_organization` is therefore a read-only **data source**, not a resource. A project's `organization_id` is computed (assigned by the API), not configurable.
 
 **Architecture:** Two layers. `internal/client` is a thin, Terraform-agnostic HTTP client for the Dokploy RPC-style API, fully unit-tested with `httptest`. `internal/provider` implements `terraform-plugin-framework` resources that translate Terraform state to/from the client. The `dokploy_application` resource orchestrates create + configure + deploy + status-polling in a single operation.
 
@@ -23,49 +25,58 @@
 
 ## Task 1: Verify the live Dokploy API and write the API reference
 
-This task is exploratory, not TDD. It produces a reference document that every later client task depends on. It requires the user's live instance — ask the user for `DOKPLOY_ENDPOINT` and `DOKPLOY_API_KEY` before starting.
+This task is exploratory, not TDD. It produces a reference document that every later client task depends on. It runs against the live instance using the credentials in `.dokploy-test-env` (already populated). Run `source .dokploy-test-env` first.
+
+Already verified during brainstorming (do not re-discover, just confirm):
+- `GET <endpoint>/api/project.all` → `200`, JSON array. Each project: `projectId`, `name`, `description`, `createdAt`, `organizationId`, `env`, `environments[]`, `projectTags[]`. Each environment: `name`, `environmentId`, `isDefault` (bool), `applications[]`.
+- `GET <endpoint>/api/organization.all` → `200`, JSON array of one org: `id`, `name`, `slug`, `logo`, `ownerId`, `members[]`. Organizations cannot be created/modified via the API.
+- `applicationStatus` is the deploy-status field; value `done` observed.
+- `swagger.json` is not served at `/swagger.json` or `/api/swagger.json` (both fail). The Swagger UI is at `/swagger` (HTML).
 
 **Files:**
 - Create: `internal/client/API.md`
 
-- [ ] **Step 1: Fetch the OpenAPI/Swagger spec**
-
-Run (substitute the real endpoint):
+- [ ] **Step 1: Locate the OpenAPI spec (best effort)**
 
 ```bash
-curl -s "$DOKPLOY_ENDPOINT/swagger/json" -o /tmp/dokploy-swagger.json \
-  || curl -s "$DOKPLOY_ENDPOINT/api/swagger.json" -o /tmp/dokploy-swagger.json
-python3 -m json.tool /tmp/dokploy-swagger.json | head -50
+source .dokploy-test-env
+for p in api/openapi.json openapi.json api/swagger/json api/docs/json; do
+  echo "== $p =="
+  curl -s -m 20 -o /tmp/sw.json -w "HTTP %{http_code} bytes %{size_download}\n" \
+    -H "x-api-key: $DOKPLOY_API_KEY" "$DOKPLOY_ENDPOINT/$p"
+done
+head -c 200 /tmp/sw.json
 ```
 
-If neither path works, open `$DOKPLOY_ENDPOINT/swagger` in a browser and locate the JSON spec URL from the network tab.
+If a JSON spec is found, use it. If not, skip it — Step 2 probes endpoints directly, which is sufficient.
 
-- [ ] **Step 2: Extract the relevant endpoints**
+- [ ] **Step 2: Probe the mutation endpoints directly**
 
-For each of these routers, record the exact HTTP method, path, request body fields, and response body fields:
+The read endpoints are already known. Confirm the *mutation* endpoints and their payloads by exercising them against a throwaway project. For each router, record exact HTTP method, path, request body fields, and response body fields:
 
-- `organization.*` — create, one/get, update, remove/delete, all
-- `project.*` — create, one, update, remove, all
-- `environment.*` — create, one, update, remove, byProjectId/all
-- `application.*` — create, one, update, delete, saveDockerProvider, saveEnvironment, deploy
-- `domain.*` — create, one/byApplicationId, update, delete
+- `project.*` — `create`, `one`, `update`, `remove`
+- `environment.*` — `create`, `one`, `update`, `remove` (confirm this router exists)
+- `application.*` — `create`, `one`, `update`, `delete`, `saveDockerProvider`, `saveEnvironment`, `deploy`
+- `domain.*` — `create`, `one`, `update`, `delete`
 
-Run, for example:
+Example probe (create then delete a throwaway project):
 
 ```bash
-python3 -c "import json; d=json.load(open('/tmp/dokploy-swagger.json')); [print(m.upper(), p) for p,ms in d['paths'].items() for m in ms if any(p.startswith('/'+r) or ('/'+r) in p for r in ['organization','project','environment','application','domain'])]"
+source .dokploy-test-env
+curl -s -X POST -H "x-api-key: $DOKPLOY_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"tf-probe-delete-me"}' "$DOKPLOY_ENDPOINT/api/project.create"
 ```
 
-- [ ] **Step 3: Confirm the deployment status field**
+- [ ] **Step 3: Confirm the deployment status field values**
 
-Create a throwaway application via the UI, call `application.one`, and record which field carries deploy status and its possible values (expected: `applicationStatus` with `idle`/`running`/`done`/`error` — confirm exact strings).
+Call `application.one` on an application mid-deploy and after, and record every
+`applicationStatus` value seen (expected `idle`/`running`/`done`/`error` — confirm exact strings and which mean "finished" vs "failed").
 
-- [ ] **Step 4: Confirm three risk items from the spec**
+- [ ] **Step 4: Confirm two risk items from the spec**
 
 Record answers in `API.md`:
 1. Does `application.one` return `registryPassword` / docker credentials, or omit them?
-2. Does `organization.remove` succeed on a normal org, or error on the active/last org?
-3. What field on `project.create` / `project.one` carries the organization id, and is it required on create?
+2. Does the `environment.*` router exist, and what are its exact endpoint names and payload fields?
 
 - [ ] **Step 5: Write `internal/client/API.md`**
 
@@ -74,7 +85,7 @@ Document, for every endpoint above: HTTP method, full path (relative to `/api`),
 - [ ] **Step 6: Commit**
 
 ```bash
-gofmt -l . ; git add internal/client/API.md && git commit -m "docs: dokploy API reference from live swagger"
+git add internal/client/API.md && git commit -m "docs: dokploy API reference from live instance"
 ```
 
 ---
@@ -503,9 +514,12 @@ gofmt -w . ; git add internal/client/client.go internal/client/client_test.go &&
 
 ---
 
-## Task 4: Organization client methods
+## Task 4: Organization client method
 
-Adjust JSON field names/paths to match `internal/client/API.md` from Task 1 if they differ.
+The Dokploy API key is bound to one organization; organizations cannot be
+created or modified via the API. The client only needs to *read* the
+organization, via `organization.all` (verified against the live API: it returns
+a JSON array of organization objects, each with `id`, `name`, `slug`).
 
 **Files:**
 - Create: `internal/client/organization.go`
@@ -520,52 +534,30 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-func TestCreateOrganization(t *testing.T) {
+func TestListOrganizations(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/organization.create" {
-			t.Errorf("got %s %s", r.Method, r.URL.Path)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/organization.all" {
+			t.Errorf("got %s %s, want GET /api/organization.all", r.Method, r.URL.Path)
 		}
-		var body map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["name"] != "acme" {
-			t.Errorf("name = %q, want acme", body["name"])
-		}
-		_ = json.NewEncoder(w).Encode(Organization{ID: "org1", Name: "acme"})
+		_, _ = w.Write([]byte(`[{"id":"org1","name":"Acme","slug":"acme"}]`))
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, "secret")
-	org, err := c.CreateOrganization(context.Background(), OrganizationInput{Name: "acme"})
+	orgs, err := c.ListOrganizations(context.Background())
 	if err != nil {
-		t.Fatalf("CreateOrganization() error = %v", err)
+		t.Fatalf("ListOrganizations() error = %v", err)
 	}
-	if org.ID != "org1" || org.Name != "acme" {
-		t.Errorf("org = %+v", org)
+	if len(orgs) != 1 {
+		t.Fatalf("len(orgs) = %d, want 1", len(orgs))
 	}
-}
-
-func TestGetOrganization(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("organizationId") != "org1" {
-			t.Errorf("organizationId = %q", r.URL.Query().Get("organizationId"))
-		}
-		_ = json.NewEncoder(w).Encode(Organization{ID: "org1", Name: "acme"})
-	}))
-	defer srv.Close()
-
-	c := New(srv.URL, "secret")
-	org, err := c.GetOrganization(context.Background(), "org1")
-	if err != nil {
-		t.Fatalf("GetOrganization() error = %v", err)
-	}
-	if org.Name != "acme" {
-		t.Errorf("org.Name = %q, want acme", org.Name)
+	if orgs[0].ID != "org1" || orgs[0].Name != "Acme" || orgs[0].Slug != "acme" {
+		t.Errorf("org = %+v", orgs[0])
 	}
 }
 ```
@@ -573,7 +565,7 @@ func TestGetOrganization(t *testing.T) {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/client/ -run Organization -v`
-Expected: FAIL — `undefined: Organization`, `undefined: OrganizationInput`.
+Expected: FAIL — `undefined: Organization`, `c.ListOrganizations undefined`.
 
 - [ ] **Step 3: Write `internal/client/organization.go`**
 
@@ -583,52 +575,24 @@ package client
 import (
 	"context"
 	"net/http"
-	"net/url"
 )
 
-// Organization is the top-level tenancy object in Dokploy.
+// Organization is the tenancy object an API key is bound to. Read-only:
+// organizations cannot be created or modified through the Dokploy API.
 type Organization struct {
-	ID   string `json:"organizationId"`
+	ID   string `json:"id"`
 	Name string `json:"name"`
+	Slug string `json:"slug"`
 }
 
-// OrganizationInput is the writable payload for create/update.
-type OrganizationInput struct {
-	Name string `json:"name"`
-}
-
-func (c *Client) CreateOrganization(ctx context.Context, in OrganizationInput) (*Organization, error) {
-	var out Organization
-	if err := c.do(ctx, http.MethodPost, "organization.create", in, nil, &out); err != nil {
+// ListOrganizations returns every organization visible to the API key. In
+// practice an API key sees exactly one organization.
+func (c *Client) ListOrganizations(ctx context.Context) ([]Organization, error) {
+	var out []Organization
+	if err := c.do(ctx, http.MethodGet, "organization.all", nil, nil, &out); err != nil {
 		return nil, err
 	}
-	return &out, nil
-}
-
-func (c *Client) GetOrganization(ctx context.Context, id string) (*Organization, error) {
-	var out Organization
-	q := url.Values{"organizationId": {id}}
-	if err := c.do(ctx, http.MethodGet, "organization.one", nil, q, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-func (c *Client) UpdateOrganization(ctx context.Context, id string, in OrganizationInput) (*Organization, error) {
-	payload := struct {
-		OrganizationInput
-		ID string `json:"organizationId"`
-	}{OrganizationInput: in, ID: id}
-	var out Organization
-	if err := c.do(ctx, http.MethodPost, "organization.update", payload, nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-func (c *Client) DeleteOrganization(ctx context.Context, id string) error {
-	payload := map[string]string{"organizationId": id}
-	return c.do(ctx, http.MethodPost, "organization.remove", payload, nil, nil)
+	return out, nil
 }
 ```
 
@@ -640,7 +604,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-gofmt -w . ; git add internal/client/organization*.go && git commit -m "feat: organization API client methods"
+gofmt -w . ; git add internal/client/organization*.go && git commit -m "feat: organization read client method"
 ```
 
 ---
@@ -673,18 +637,21 @@ func TestCreateProject(t *testing.T) {
 		}
 		var body ProjectInput
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Name != "web" || body.OrganizationID != "org1" {
+		if body.Name != "web" {
 			t.Errorf("body = %+v", body)
 		}
 		_ = json.NewEncoder(w).Encode(Project{
 			ID: "p1", Name: "web", OrganizationID: "org1",
-			Environments: []Environment{{ID: "env-prod", Name: "production"}},
+			Environments: []Environment{
+				{ID: "env-prod", Name: "production", IsDefault: true},
+				{ID: "env-stg", Name: "staging", IsDefault: false},
+			},
 		})
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, "secret")
-	p, err := c.CreateProject(context.Background(), ProjectInput{Name: "web", OrganizationID: "org1"})
+	p, err := c.CreateProject(context.Background(), ProjectInput{Name: "web"})
 	if err != nil {
 		t.Fatalf("CreateProject() error = %v", err)
 	}
@@ -734,8 +701,14 @@ type Project struct {
 }
 
 // ProductionEnvironmentID returns the id of the auto-created production
-// environment, or "" if not present.
+// environment (the one flagged isDefault), or "" if not present.
 func (p *Project) ProductionEnvironmentID() string {
+	for _, e := range p.Environments {
+		if e.IsDefault {
+			return e.ID
+		}
+	}
+	// Fall back to matching by name if isDefault is absent.
 	for _, e := range p.Environments {
 		if e.Name == "production" {
 			return e.ID
@@ -744,11 +717,11 @@ func (p *Project) ProductionEnvironmentID() string {
 	return ""
 }
 
-// ProjectInput is the writable payload for create/update.
+// ProjectInput is the writable payload for create/update. organizationId is
+// not settable — the API key determines the organization.
 type ProjectInput struct {
-	Name           string `json:"name"`
-	Description    string `json:"description,omitempty"`
-	OrganizationID string `json:"organizationId,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 func (c *Client) CreateProject(ctx context.Context, in ProjectInput) (*Project, error) {
@@ -890,6 +863,8 @@ type Environment struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	ProjectID   string `json:"projectId"`
+	// IsDefault is true for the auto-created production environment.
+	IsDefault bool `json:"isDefault"`
 	// Env holds shared variables in dotenv format ("KEY=value\nKEY2=value2").
 	Env string `json:"env"`
 }
@@ -1459,15 +1434,21 @@ func (p *dokployProvider) Configure(ctx context.Context, req provider.ConfigureR
 
 	c := client.New(endpoint, apiKey)
 	resp.ResourceData = c
+	resp.DataSourceData = c
 }
 
 func (p *dokployProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
-		NewOrganizationResource,
 		NewProjectResource,
 		NewEnvironmentResource,
 		NewApplicationResource,
 		NewDomainResource,
+	}
+}
+
+func (p *dokployProvider) DataSources(_ context.Context) []func() datasource.DataSource {
+	return []func() datasource.DataSource{
+		NewOrganizationDataSource,
 	}
 }
 
@@ -1477,9 +1458,15 @@ func getEnv(key string) string {
 }
 ```
 
-Add `"os"` and `"github.com/hashicorp/terraform-plugin-framework/path"` and `"github.com/lucasaarch/terraform-provider-dokploy/internal/client"` to the imports.
+Also delete the placeholder `DataSources` method from the Task 2 skeleton — the
+real one above replaces it. Add `"os"`, `"github.com/hashicorp/terraform-plugin-framework/path"`,
+and `"github.com/lucasaarch/terraform-provider-dokploy/internal/client"` to the imports.
 
-> The five `New*Resource` constructors are defined in Tasks 10–14. The provider will not compile until at least stub constructors exist. Either implement Tasks 10–14 before running `go build`, or temporarily return `nil` from `Resources` while building incrementally — but the final state of this task requires all five wired.
+> The four `New*Resource` constructors are defined in Tasks 11–14, and
+> `NewOrganizationDataSource` in Task 10. The provider will not compile until
+> all five exist. Either implement Tasks 10–14 before running `go build`, or
+> temporarily return `nil` from `Resources`/`DataSources` while building
+> incrementally — but the final state of this task requires all five wired.
 
 - [ ] **Step 3: Run the test**
 
@@ -1494,54 +1481,49 @@ gofmt -w . ; git add internal/provider/provider.go internal/provider/provider_te
 
 ---
 
-## Task 10: Organization resource
+## Task 10: Organization data source
+
+The Dokploy API key is bound to one organization that cannot be created or
+modified. `dokploy_organization` is therefore a read-only data source exposing
+that organization.
 
 **Files:**
-- Create: `internal/provider/organization_resource.go`
-- Test: `internal/provider/organization_resource_test.go`
+- Create: `internal/provider/organization_data_source.go`
+- Test: `internal/provider/organization_data_source_test.go`
+- Create: `internal/provider/helpers_test.go`
 
 - [ ] **Step 1: Write the failing acceptance test**
 
-`internal/provider/organization_resource_test.go`:
+`internal/provider/organization_data_source_test.go`:
 
 ```go
 package provider
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
-func TestAccOrganizationResource(t *testing.T) {
-	name := fmt.Sprintf("tf-acc-org-%d", randInt())
+func TestAccOrganizationDataSource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: fmt.Sprintf(`resource "dokploy_organization" "test" { name = %q }`, name),
+				Config: `data "dokploy_organization" "current" {}`,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("dokploy_organization.test", "name", name),
-					resource.TestCheckResourceAttrSet("dokploy_organization.test", "id"),
+					resource.TestCheckResourceAttrSet("data.dokploy_organization.current", "id"),
+					resource.TestCheckResourceAttrSet("data.dokploy_organization.current", "name"),
 				),
-			},
-			{
-				ResourceName:      "dokploy_organization.test",
-				ImportState:       true,
-				ImportStateVerify: true,
-			},
-			{
-				Config: fmt.Sprintf(`resource "dokploy_organization" "test" { name = "%s-renamed" }`, name),
-				Check:  resource.TestCheckResourceAttr("dokploy_organization.test", "name", name+"-renamed"),
 			},
 		},
 	})
 }
 ```
 
-Create `internal/provider/helpers_test.go` with the shared `randInt` helper:
+Create `internal/provider/helpers_test.go` with the shared `randInt` helper
+(used by acceptance tests in Tasks 11–14 and 17):
 
 ```go
 package provider
@@ -1561,10 +1543,10 @@ func randInt() int {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `go test ./internal/provider/ -run TestAccOrganizationResource -v` (without `TF_ACC`)
-Expected: test is SKIPPED (acceptance tests need `TF_ACC=1`), but the package must still **compile-fail** with `undefined: NewOrganizationResource`. Confirm via `go build ./...`.
+Run: `go build ./...`
+Expected: FAIL — `undefined: NewOrganizationDataSource`.
 
-- [ ] **Step 3: Write `internal/provider/organization_resource.go`**
+- [ ] **Step 3: Write `internal/provider/organization_data_source.go`**
 
 ```go
 package provider
@@ -1573,58 +1555,58 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hashicorp/terraform-plugin-framework/path"
-	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/lucasaarch/terraform-provider-dokploy/internal/client"
 )
 
 var (
-	_ resource.Resource                = &organizationResource{}
-	_ resource.ResourceWithConfigure   = &organizationResource{}
-	_ resource.ResourceWithImportState = &organizationResource{}
+	_ datasource.DataSource              = &organizationDataSource{}
+	_ datasource.DataSourceWithConfigure = &organizationDataSource{}
 )
 
-type organizationResource struct {
+type organizationDataSource struct {
 	client *client.Client
 }
 
-// NewOrganizationResource is the resource constructor registered by the provider.
-func NewOrganizationResource() resource.Resource {
-	return &organizationResource{}
+// NewOrganizationDataSource is the data source constructor registered by the provider.
+func NewOrganizationDataSource() datasource.DataSource {
+	return &organizationDataSource{}
 }
 
-type organizationModel struct {
+type organizationDataSourceModel struct {
 	ID   types.String `tfsdk:"id"`
 	Name types.String `tfsdk:"name"`
+	Slug types.String `tfsdk:"slug"`
 }
 
-func (r *organizationResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (d *organizationDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_organization"
 }
 
-func (r *organizationResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (d *organizationDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "A Dokploy organization, the top-level tenancy object.",
+		MarkdownDescription: "The Dokploy organization the configured API key belongs to.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Organization identifier.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"name": schema.StringAttribute{
-				Required:            true,
+				Computed:            true,
 				MarkdownDescription: "Organization name.",
+			},
+			"slug": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "Organization slug (may be empty).",
 			},
 		},
 	}
 }
 
-func (r *organizationResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (d *organizationDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -1634,95 +1616,41 @@ func (r *organizationResource) Configure(_ context.Context, req resource.Configu
 			fmt.Sprintf("Expected *client.Client, got %T.", req.ProviderData))
 		return
 	}
-	r.client = c
+	d.client = c
 }
 
-func (r *organizationResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan organizationModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	org, err := r.client.CreateOrganization(ctx, client.OrganizationInput{Name: plan.Name.ValueString()})
+func (d *organizationDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
+	orgs, err := d.client.ListOrganizations(ctx)
 	if err != nil {
-		resp.Diagnostics.AddError("Error creating organization", err.Error())
-		return
-	}
-
-	plan.ID = types.StringValue(org.ID)
-	plan.Name = types.StringValue(org.Name)
-	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
-}
-
-func (r *organizationResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state organizationModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	org, err := r.client.GetOrganization(ctx, state.ID.ValueString())
-	if err != nil {
-		if client.IsNotFound(err) {
-			resp.State.RemoveResource(ctx)
-			return
-		}
 		resp.Diagnostics.AddError("Error reading organization", err.Error())
 		return
 	}
+	if len(orgs) == 0 {
+		resp.Diagnostics.AddError("No organization found",
+			"The configured API key is not associated with any organization.")
+		return
+	}
 
-	state.Name = types.StringValue(org.Name)
+	org := orgs[0]
+	state := organizationDataSourceModel{
+		ID:   types.StringValue(org.ID),
+		Name: types.StringValue(org.Name),
+		Slug: types.StringValue(org.Slug),
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
-}
-
-func (r *organizationResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan organizationModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	org, err := r.client.UpdateOrganization(ctx, plan.ID.ValueString(),
-		client.OrganizationInput{Name: plan.Name.ValueString()})
-	if err != nil {
-		resp.Diagnostics.AddError("Error updating organization", err.Error())
-		return
-	}
-
-	plan.Name = types.StringValue(org.Name)
-	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
-}
-
-func (r *organizationResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state organizationModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	if err := r.client.DeleteOrganization(ctx, state.ID.ValueString()); err != nil {
-		resp.Diagnostics.AddError("Error deleting organization",
-			"Dokploy may block deletion of the active or last organization. Underlying error: "+err.Error())
-		return
-	}
-}
-
-func (r *organizationResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 ```
 
 - [ ] **Step 4: Build and run acceptance test**
 
 Run: `go build ./...` — expected: compiles.
-Run: `TF_ACC=1 DOKPLOY_ENDPOINT=... DOKPLOY_API_KEY=... go test ./internal/provider/ -run TestAccOrganizationResource -v`
-Expected: PASS (3 test steps).
+Run: `TF_ACC=1 DOKPLOY_ENDPOINT=... DOKPLOY_API_KEY=... go test ./internal/provider/ -run TestAccOrganizationDataSource -v`
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-gofmt -w . ; git add internal/provider/organization_resource.go internal/provider/organization_resource_test.go internal/provider/helpers_test.go && git commit -m "feat: dokploy_organization resource"
+gofmt -w . ; git add internal/provider/organization_data_source.go internal/provider/organization_data_source_test.go internal/provider/helpers_test.go && git commit -m "feat: dokploy_organization data source"
 ```
 
 ---
@@ -1852,9 +1780,8 @@ func (r *projectResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				MarkdownDescription: "Project description.",
 			},
 			"organization_id": schema.StringAttribute{
-				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Organization the project belongs to. Defaults to the API key's organization.",
+				MarkdownDescription: "Organization the project belongs to. Determined by the API key; not configurable.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"production_env": schema.MapAttribute{
@@ -1904,9 +1831,8 @@ func (r *projectResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 
 	proj, err := r.client.CreateProject(ctx, client.ProjectInput{
-		Name:           plan.Name.ValueString(),
-		Description:    plan.Description.ValueString(),
-		OrganizationID: plan.OrganizationID.ValueString(),
+		Name:        plan.Name.ValueString(),
+		Description: plan.Description.ValueString(),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating project", err.Error())
@@ -2945,12 +2871,12 @@ gofmt -w . ; git add internal/provider/domain_resource.go internal/provider/doma
 
 **Files:**
 - Create: `examples/provider/provider.tf`
-- Create: `examples/resources/dokploy_organization/resource.tf`
+- Create: `examples/data-sources/dokploy_organization/data-source.tf`
 - Create: `examples/resources/dokploy_project/resource.tf`
 - Create: `examples/resources/dokploy_environment/resource.tf`
 - Create: `examples/resources/dokploy_application/resource.tf`
 - Create: `examples/resources/dokploy_domain/resource.tf`
-- Create: `examples/resources/dokploy_organization/import.sh` (and one per resource)
+- Create: `examples/resources/dokploy_project/import.sh` (and one per managed resource)
 - Modify: `internal/provider/provider.go` (add `go:generate` directive)
 
 - [ ] **Step 1: Create `examples/provider/provider.tf`**
@@ -2970,13 +2896,16 @@ provider "dokploy" {
 }
 ```
 
-- [ ] **Step 2: Create each resource example**
+- [ ] **Step 2: Create the data source and resource examples**
 
-`examples/resources/dokploy_organization/resource.tf`:
+`examples/data-sources/dokploy_organization/data-source.tf`:
 
 ```hcl
-resource "dokploy_organization" "main" {
-  name = "my-company"
+# The organization the configured API key belongs to.
+data "dokploy_organization" "current" {}
+
+output "organization_name" {
+  value = data.dokploy_organization.current.name
 }
 ```
 
@@ -2984,9 +2913,8 @@ resource "dokploy_organization" "main" {
 
 ```hcl
 resource "dokploy_project" "app" {
-  name            = "my-app"
-  description     = "Main application project"
-  organization_id = dokploy_organization.main.id
+  name        = "my-app"
+  description = "Main application project"
 
   production_env = {
     LOG_LEVEL = "info"
@@ -3041,15 +2969,32 @@ resource "dokploy_domain" "web" {
 
 - [ ] **Step 3: Create import scripts**
 
-Create `examples/resources/dokploy_organization/import.sh`:
+Create one `import.sh` per managed resource (the organization is a data source
+and has no import). Each file contains a single `terraform import` line:
+
+`examples/resources/dokploy_project/import.sh`:
 
 ```bash
-terraform import dokploy_organization.main <organizationId>
+terraform import dokploy_project.app <projectId>
 ```
 
-Create the equivalent `import.sh` for the other four resources, substituting the
-resource type, local name, and id placeholder (`<projectId>`, `<environmentId>`,
-`<applicationId>`, `<domainId>`).
+`examples/resources/dokploy_environment/import.sh`:
+
+```bash
+terraform import dokploy_environment.staging <environmentId>
+```
+
+`examples/resources/dokploy_application/import.sh`:
+
+```bash
+terraform import dokploy_application.api <applicationId>
+```
+
+`examples/resources/dokploy_domain/import.sh`:
+
+```bash
+terraform import dokploy_domain.web <domainId>
+```
 
 - [ ] **Step 4: Add the `go:generate` directive**
 
@@ -3062,7 +3007,8 @@ Add this line to `internal/provider/provider.go`, directly above the `package pr
 - [ ] **Step 5: Generate docs**
 
 Run: `go generate ./...`
-Expected: a `docs/` directory is created with `index.md` and one page per resource.
+Expected: a `docs/` directory is created with `index.md`, one page per resource
+under `docs/resources/`, and the organization page under `docs/data-sources/`.
 
 - [ ] **Step 6: Commit**
 
@@ -3274,11 +3220,14 @@ Manage [Dokploy](https://dokploy.com) infrastructure declaratively with Terrafor
 
 ## Resources
 
-- `dokploy_organization` — top-level tenancy
 - `dokploy_project` — project plus its auto-created `production` environment
 - `dokploy_environment` — custom environments
 - `dokploy_application` — Docker-image applications (deploys on apply)
 - `dokploy_domain` — domains routing traffic to applications
+
+## Data sources
+
+- `dokploy_organization` — the organization the API key belongs to (read-only)
 
 ## Provider configuration
 
@@ -3316,18 +3265,15 @@ import (
 )
 
 // TestAccEndToEnd builds the full resource graph in one apply:
-// organization -> project -> environment + application -> domain.
+// organization (data source) -> project -> environment + application -> domain.
 func TestAccEndToEnd(t *testing.T) {
 	suffix := randInt()
 	config := fmt.Sprintf(`
-resource "dokploy_organization" "e2e" {
-  name = "tf-acc-e2e-org-%d"
-}
+data "dokploy_organization" "e2e" {}
 
 resource "dokploy_project" "e2e" {
-  name            = "tf-acc-e2e-proj-%d"
-  organization_id = dokploy_organization.e2e.id
-  production_env  = { LOG_LEVEL = "info" }
+  name           = "tf-acc-e2e-proj-%d"
+  production_env = { LOG_LEVEL = "info" }
 }
 
 resource "dokploy_environment" "e2e" {
@@ -3347,7 +3293,7 @@ resource "dokploy_domain" "e2e" {
   application_id = dokploy_application.e2e.id
   host           = "tf-acc-e2e-%d.example.com"
   port           = 80
-}`, suffix, suffix, suffix)
+}`, suffix, suffix)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -3356,8 +3302,12 @@ resource "dokploy_domain" "e2e" {
 			{
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttrSet("dokploy_organization.e2e", "id"),
+					resource.TestCheckResourceAttrSet("data.dokploy_organization.e2e", "id"),
 					resource.TestCheckResourceAttrSet("dokploy_project.e2e", "id"),
+					// the project's org must match the data source's org
+					resource.TestCheckResourceAttrPair(
+						"dokploy_project.e2e", "organization_id",
+						"data.dokploy_organization.e2e", "id"),
 					resource.TestCheckResourceAttrSet("dokploy_environment.e2e", "id"),
 					resource.TestCheckResourceAttr("dokploy_application.e2e", "status", "done"),
 					resource.TestCheckResourceAttrSet("dokploy_domain.e2e", "id"),
