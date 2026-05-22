@@ -2,12 +2,16 @@ package provider
 
 import (
 	"context"
+	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	"github.com/lucasaarch/terraform-provider-dokploy/internal/client"
 )
 
 // Ensure dokployProvider satisfies the provider.Provider interface.
@@ -52,14 +56,57 @@ func (p *dokployProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 	}
 }
 
-func (p *dokployProvider) Configure(_ context.Context, _ provider.ConfigureRequest, _ *provider.ConfigureResponse) {
-	// Implemented in a later task.
+func (p *dokployProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var config dokployProviderModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	endpoint := config.Endpoint.ValueString()
+	if endpoint == "" {
+		endpoint = getEnv("DOKPLOY_ENDPOINT")
+	}
+	apiKey := config.APIKey.ValueString()
+	if apiKey == "" {
+		apiKey = getEnv("DOKPLOY_API_KEY")
+	}
+
+	if endpoint == "" {
+		resp.Diagnostics.AddAttributeError(path.Root("endpoint"),
+			"Missing Dokploy endpoint",
+			"Set the `endpoint` attribute or the DOKPLOY_ENDPOINT environment variable.")
+	}
+	if apiKey == "" {
+		resp.Diagnostics.AddAttributeError(path.Root("api_key"),
+			"Missing Dokploy API key",
+			"Set the `api_key` attribute or the DOKPLOY_API_KEY environment variable.")
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	c := client.New(endpoint, apiKey)
+	resp.ResourceData = c
+	resp.DataSourceData = c
 }
 
 func (p *dokployProvider) Resources(_ context.Context) []func() resource.Resource {
-	return nil // Populated in a later task.
+	return []func() resource.Resource{
+		NewProjectResource,
+		NewEnvironmentResource,
+		NewApplicationResource,
+		NewDomainResource,
+	}
 }
 
 func (p *dokployProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return nil
+	return []func() datasource.DataSource{
+		NewOrganizationDataSource,
+	}
+}
+
+// getEnv wraps os.Getenv so tests can reference it through one symbol.
+func getEnv(key string) string {
+	return os.Getenv(key)
 }
