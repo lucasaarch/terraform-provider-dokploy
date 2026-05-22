@@ -19,8 +19,10 @@ type Environment struct {
 }
 
 // EnvironmentInput is the writable payload for create/update.
+// All fields use omitempty so partial updates (e.g. env-only) do not send
+// empty strings that fail the server's Zod min-length validation.
 type EnvironmentInput struct {
-	Name        string `json:"name"`
+	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
 	ProjectID   string `json:"projectId,omitempty"`
 	Env         string `json:"env,omitempty"`
