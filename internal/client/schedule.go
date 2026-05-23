@@ -31,6 +31,7 @@ type ScheduleInput struct {
 	ShellType      string `json:"shellType,omitempty"`
 	ScheduleType   string `json:"scheduleType,omitempty"`
 	ApplicationID  string `json:"applicationId,omitempty"`
+	ServerID       string `json:"serverId,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 	Timezone       string `json:"timezone,omitempty"`
 }

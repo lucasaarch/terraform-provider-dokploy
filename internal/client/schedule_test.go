@@ -85,3 +85,29 @@ func TestGetSchedule_NotFound(t *testing.T) {
 		t.Errorf("IsNotFound() = false")
 	}
 }
+
+func TestCreateSchedule_Server(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body ScheduleInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.ScheduleType != "server" || body.ServerID != "srv1" {
+			t.Errorf("body = %+v", body)
+		}
+		_ = json.NewEncoder(w).Encode(Schedule{ID: "s3", Name: body.Name, ScheduleType: body.ScheduleType, ServerID: body.ServerID})
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "k")
+	s, err := c.CreateSchedule(context.Background(), ScheduleInput{
+		Name:           "weekly-vacuum",
+		CronExpression: "0 4 * * 0",
+		Command:        "echo",
+		ScheduleType:   "server",
+		ServerID:       "srv1",
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedule() error = %v", err)
+	}
+	if s.ID != "s3" || s.ServerID != "srv1" {
+		t.Errorf("s = %+v", s)
+	}
+}
