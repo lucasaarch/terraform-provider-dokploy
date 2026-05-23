@@ -339,38 +339,80 @@ Run: `go test ./internal/client/ -run SshKey -v` — Expected: FAIL — `undefin
 
 - [ ] **Step 8: Write `internal/client/sshkey.go`**
 
+> The Dokploy SSH key API has two traits that shape this code:
+> 1. **`sshKey.create` returns HTTP 200 with an empty body**, identical to `backup.create` in v0.3. The new key's id is found by listing `sshKey.all` after the call and diffing.
+> 2. **`sshKey.update` only accepts `name` and `description`** — the keys themselves are immutable. Trying to update `privateKey`/`publicKey` results in a server error.
+
 ```go
 package client
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 )
 
-// SshKey is an SSH key registered in Dokploy. Read-write at the organization level.
+// SshKey is an SSH key registered in Dokploy.
 type SshKey struct {
 	ID             string `json:"sshKeyId"`
 	Name           string `json:"name"`
+	Description    string `json:"description"`
 	PublicKey      string `json:"publicKey"`
 	PrivateKey     string `json:"privateKey"`
 	OrganizationID string `json:"organizationId"`
 }
 
-// SshKeyInput is the create/update payload.
+// SshKeyInput is the create payload (name + keys + org + optional description).
 type SshKeyInput struct {
 	Name           string `json:"name,omitempty"`
+	Description    string `json:"description,omitempty"`
 	PublicKey      string `json:"publicKey,omitempty"`
 	PrivateKey     string `json:"privateKey,omitempty"`
 	OrganizationID string `json:"organizationId,omitempty"`
 }
 
-func (c *Client) CreateSshKey(ctx context.Context, in SshKeyInput) (*SshKey, error) {
-	var out SshKey
-	if err := c.do(ctx, http.MethodPost, "sshKey.create", in, nil, &out); err != nil {
+// SshKeyUpdateInput is the restricted update payload — only name/description.
+type SshKeyUpdateInput struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// ListSshKeys returns every SSH key visible to the API key.
+func (c *Client) ListSshKeys(ctx context.Context) ([]SshKey, error) {
+	var out []SshKey
+	if err := c.do(ctx, http.MethodGet, "sshKey.all", nil, nil, &out); err != nil {
 		return nil, err
 	}
-	return &out, nil
+	return out, nil
+}
+
+// CreateSshKey creates an SSH key. The API responds with an empty body, so the
+// new key's id is discovered by diffing sshKey.all before and after.
+func (c *Client) CreateSshKey(ctx context.Context, in SshKeyInput) (*SshKey, error) {
+	before, err := c.ListSshKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing ssh keys before create: %w", err)
+	}
+	seen := make(map[string]struct{}, len(before))
+	for _, k := range before {
+		seen[k.ID] = struct{}{}
+	}
+
+	if err := c.do(ctx, http.MethodPost, "sshKey.create", in, nil, nil); err != nil {
+		return nil, err
+	}
+
+	after, err := c.ListSshKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing ssh keys after create: %w", err)
+	}
+	for i := range after {
+		if _, was := seen[after[i].ID]; !was {
+			return &after[i], nil
+		}
+	}
+	return nil, fmt.Errorf("sshKey.create returned 200 but no new key found")
 }
 
 func (c *Client) GetSshKey(ctx context.Context, id string) (*SshKey, error) {
@@ -382,11 +424,13 @@ func (c *Client) GetSshKey(ctx context.Context, id string) (*SshKey, error) {
 	return &out, nil
 }
 
-func (c *Client) UpdateSshKey(ctx context.Context, id string, in SshKeyInput) error {
+// UpdateSshKey updates name and/or description. The keys themselves are
+// immutable — changing them requires destroying and recreating the resource.
+func (c *Client) UpdateSshKey(ctx context.Context, id string, in SshKeyUpdateInput) error {
 	payload := struct {
-		SshKeyInput
+		SshKeyUpdateInput
 		ID string `json:"sshKeyId"`
-	}{SshKeyInput: in, ID: id}
+	}{SshKeyUpdateInput: in, ID: id}
 	return c.do(ctx, http.MethodPost, "sshKey.update", payload, nil, nil)
 }
 
@@ -395,8 +439,6 @@ func (c *Client) DeleteSshKey(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "sshKey.remove", payload, nil, nil)
 }
 ```
-
-> If Task 1's probe showed the delete verb is `.delete` instead of `.remove`, change the path accordingly. Same applies if `sshKey.update` doesn't accept a non-`sshKeyId` field — adjust the InputStruct accordingly.
 
 - [ ] **Step 9: Run unit tests to verify they pass**
 
@@ -528,15 +570,21 @@ func (r *sshKeyResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"public_key": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Public key in OpenSSH format (`ssh-rsa AAAA...`). If omitted, the provider generates a 4096-bit RSA pair.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "Public key in OpenSSH format (`ssh-rsa AAAA...`). If omitted, the provider generates a 4096-bit RSA pair. **Immutable**: changing this value forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"private_key": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
 				Sensitive:           true,
-				MarkdownDescription: "Private key in PEM PKCS#1 format. If omitted, the provider generates one. Not returned by `terraform import`; the import process leaves this attribute empty.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "Private key in PEM PKCS#1 format. If omitted, the provider generates one. **Immutable**: changing this value forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -626,32 +674,17 @@ func (r *sshKeyResource) Update(ctx context.Context, req resource.UpdateRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	var state sshKeyModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
 
-	priv := plan.PrivateKey.ValueString()
-	if priv == "" {
-		priv = state.PrivateKey.ValueString()
-	}
-	pub := plan.PublicKey.ValueString()
-	if pub == "" {
-		pub = state.PublicKey.ValueString()
-	}
-
-	if err := r.client.UpdateSshKey(ctx, plan.ID.ValueString(), client.SshKeyInput{
-		Name:       plan.Name.ValueString(),
-		PublicKey:  pub,
-		PrivateKey: priv,
+	// Only name and description are mutable on sshKey.update. Public/private keys
+	// are immutable (ForceNew). The schema enforces this at plan time, so by the
+	// time Update is reached only name (and maybe description) actually changed.
+	if err := r.client.UpdateSshKey(ctx, plan.ID.ValueString(), client.SshKeyUpdateInput{
+		Name: plan.Name.ValueString(),
 	}); err != nil {
 		resp.Diagnostics.AddError("Error updating SSH key", err.Error())
 		return
 	}
 
-	plan.PrivateKey = types.StringValue(priv)
-	plan.PublicKey = types.StringValue(pub)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
