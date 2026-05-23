@@ -275,11 +275,11 @@ func TestCreateCompose(t *testing.T) {
 			t.Errorf("body = %+v", body)
 		}
 		_ = json.NewEncoder(w).Encode(Compose{
-			ID:                "co1",
-			Name:              "monitoring",
-			AppName:           "monitoring-abc",
-			EnvironmentID:     "env1",
-			ApplicationStatus: "idle",
+			ID:            "co1",
+			Name:          "monitoring",
+			AppName:       "monitoring-abc",
+			EnvironmentID: "env1",
+			ComposeStatus: "idle",
 		})
 	}))
 	defer srv.Close()
@@ -326,17 +326,19 @@ import (
 )
 
 // Compose is a Docker Compose stack managed by Dokploy.
+// The deploy-status field is named composeStatus (NOT applicationStatus).
 type Compose struct {
-	ID                string `json:"composeId"`
-	Name              string `json:"name"`
-	AppName           string `json:"appName"`
-	Description       string `json:"description"`
-	EnvironmentID     string `json:"environmentId"`
-	ServerID          *string `json:"serverId"`
-	SourceType        string `json:"sourceType"`
-	ComposeFile       string `json:"composeFile"`
-	Env               string `json:"env"`
-	ApplicationStatus string `json:"applicationStatus"`
+	ID            string   `json:"composeId"`
+	Name          string   `json:"name"`
+	AppName       string   `json:"appName"`
+	Description   string   `json:"description"`
+	EnvironmentID string   `json:"environmentId"`
+	ServerID      *string  `json:"serverId"`
+	SourceType    string   `json:"sourceType"`
+	ComposeFile   string   `json:"composeFile"`
+	Env           string   `json:"env"`
+	ComposeStatus string   `json:"composeStatus"`
+	Backups       []Backup `json:"backups"`
 }
 
 // ComposeInput is the create/update payload.
@@ -376,9 +378,11 @@ func (c *Client) UpdateCompose(ctx context.Context, id string, in ComposeInput) 
 	return c.do(ctx, http.MethodPost, "compose.update", payload, nil, nil)
 }
 
+// DeleteCompose calls compose.delete (the API uses .delete, not .remove, for
+// this router — verified in Task 1's API.md).
 func (c *Client) DeleteCompose(ctx context.Context, id string) error {
 	payload := map[string]string{"composeId": id}
-	return c.do(ctx, http.MethodPost, "compose.remove", payload, nil, nil)
+	return c.do(ctx, http.MethodPost, "compose.delete", payload, nil, nil)
 }
 
 // DeployCompose triggers an asynchronous deployment of the stack.
@@ -599,7 +603,7 @@ func (r *composeResource) Create(ctx context.Context, req resource.CreateRequest
 		if err != nil {
 			return "", err
 		}
-		return got.ApplicationStatus, nil
+		return got.ComposeStatus, nil
 	}
 	if err := deployAndWait(ctx, deployFn, statusFn, databasePollInterval, createTimeout); err != nil {
 		plan.Status = types.StringValue("error")
@@ -629,7 +633,7 @@ func (r *composeResource) Read(ctx context.Context, req resource.ReadRequest, re
 	state.Name = types.StringValue(co.Name)
 	state.EnvironmentID = types.StringValue(co.EnvironmentID)
 	state.AppName = types.StringValue(co.AppName)
-	state.Status = types.StringValue(co.ApplicationStatus)
+	state.Status = types.StringValue(co.ComposeStatus)
 	state.ComposeFile = types.StringValue(co.ComposeFile)
 	state.SourceType = types.StringValue(co.SourceType)
 	if co.Description != "" || !state.Description.IsNull() {
@@ -685,7 +689,7 @@ func (r *composeResource) Update(ctx context.Context, req resource.UpdateRequest
 		if err != nil {
 			return "", err
 		}
-		return got.ApplicationStatus, nil
+		return got.ComposeStatus, nil
 	}
 	if err := deployAndWait(ctx, deployFn, statusFn, databasePollInterval, updateTimeout); err != nil {
 		plan.Status = types.StringValue("error")
@@ -856,14 +860,35 @@ import (
 )
 
 // Mount is a volume/bind/file mount on a Dokploy service.
+// `serviceId` is write-only on create; the API does not return it. On read,
+// the parent is identified via `serviceType` + a nullable per-type id field.
 type Mount struct {
-	ID         string `json:"mountId"`
-	ServiceID  string `json:"serviceId"`
-	Type       string `json:"type"`
-	MountPath  string `json:"mountPath"`
-	HostPath   string `json:"hostPath"`
-	VolumeName string `json:"volumeName"`
-	Content    string `json:"content"`
+	ID          string  `json:"mountId"`
+	Type        string  `json:"type"`
+	MountPath   string  `json:"mountPath"`
+	HostPath    string  `json:"hostPath"`
+	VolumeName  string  `json:"volumeName"`
+	Content     string  `json:"content"`
+	ServiceType string  `json:"serviceType"`
+	// Exactly one of these will be non-null on a read response.
+	ApplicationID *string `json:"applicationId"`
+	ComposeID     *string `json:"composeId"`
+	PostgresID    *string `json:"postgresId"`
+	MysqlID       *string `json:"mysqlId"`
+	MariadbID     *string `json:"mariadbId"`
+	MongoID       *string `json:"mongoId"`
+	RedisID       *string `json:"redisId"`
+}
+
+// ResolveServiceID returns the parent service id by inspecting the nullable
+// per-type id fields populated by the API on read.
+func (m *Mount) ResolveServiceID() string {
+	for _, p := range []*string{m.ApplicationID, m.ComposeID, m.PostgresID, m.MysqlID, m.MariadbID, m.MongoID, m.RedisID} {
+		if p != nil && *p != "" {
+			return *p
+		}
+	}
+	return ""
 }
 
 // MountInput is the create/update payload. Per-type required fields:
@@ -1213,7 +1238,9 @@ func (r *mountResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		resp.Diagnostics.AddError("Error reading mount", err.Error())
 		return
 	}
-	state.ServiceID = types.StringValue(m.ServiceID)
+	if resolved := m.ResolveServiceID(); resolved != "" {
+		state.ServiceID = types.StringValue(resolved)
+	}
 	state.Type = types.StringValue(m.Type)
 	state.MountPath = types.StringValue(m.MountPath)
 	if m.HostPath != "" {
@@ -1666,6 +1693,17 @@ git commit -m "feat: dokploy_port resource"
 ---
 
 ## Task 5: Notification client + five notification resources
+
+> **Critical Task 1 findings — apply these corrections to the plan code below:**
+>
+> 1. **All 5 `notification.create<Type>` endpoints return HTTP 200 with empty body.** The new id must be discovered via `notification.all` diff (same pattern as `sshKey.create` in v0.4). Implement `ListNotifications` and wrap every `Create<Type>Notification` with a list-before / call / list-after / find-new-id flow.
+> 2. **There is NO universal `notification.update`.** Updates are 5 type-specific endpoints: `notification.updateSlack`, `notification.updateDiscord`, `notification.updateEmail`, `notification.updateTelegram`, `notification.updateGotify`. Each one requires BOTH `notificationId` AND the type-specific sub-id (`slackId`/`discordId`/`emailId`/`telegramId`/`gotifyId`) read from `notification.one`.
+> 3. **`notification.one` returns these type-specific sub-ids.** Add `SlackID`, `DiscordID`, `EmailID`, `TelegramID`, `GotifyID` (each as `*string`) to the `Notification` struct.
+> 4. **Each Terraform resource must expose its sub-id as a Computed attribute** (e.g. `slack_id` on `dokploy_slack_notification`) so the Update method can read it from state and pass to the type-specific update endpoint.
+> 5. The client method signature is therefore `UpdateSlackNotification(ctx, notificationId, slackId string, in SlackNotificationInput) error` (and same shape for the other four). Updates also return empty body.
+> 6. **`notification.one` returns webhook URLs / bot tokens / SMTP passwords in plaintext** — Read can overwrite state values directly (drift detection works for sensitive values).
+>
+> The plan code below DOES NOT yet reflect these corrections. The implementer must apply them while writing the code — using the v0.4 sshKey diff-pattern and v0.2 password-handling patterns as references.
 
 This task adds the shared notification client and all five type-specific resources. The Slack resource is shown in full; the other four follow the same shape with type-specific fields documented in tables.
 
@@ -2216,9 +2254,13 @@ git commit -m "feat: dokploy_{slack,discord,email,telegram,gotify}_notification 
 
 ---
 
-## Task 6: dokploy_application advanced config + backup compose support
+## Task 6: dokploy_application advanced config
 
-This task extends `dokploy_application` with `replicas`, `health_check`, and `restart_policy`, and extends `dokploy_backup` to support `database_type = "compose"`.
+> **Important Task 1 finding:** `databaseType: "compose"` is **NOT** in the backup Zod enum. Compose backup support is **dropped** from v0.5 — skip Step 2 (do not modify `backup_resource.go` validators, do not modify `client/backup.go`'s `SetTypedID` or `listBackupsForResource`). The web-server backup limitation from v0.3 also cannot be resolved (`application.one` has no `backups` field). Both confirmed; document in v0.5 README's known-limitations section.
+
+> **Important Task 1 finding:** `healthCheckSwarm` and `restartPolicySwarm` use **PascalCase** keys and **nanosecond int64** durations (not Go-style strings). The plan code below shows string fields for ergonomic HCL — the implementer converts strings ("30s") to nanoseconds via `time.ParseDuration(...).Nanoseconds()` before sending, and converts API responses back via `time.Duration(ns).String()` on read.
+
+This task extends `dokploy_application` with `replicas`, `health_check`, and `restart_policy`.
 
 **Files:**
 - Modify: `internal/client/application.go` (add HealthCheckSwarm, RestartPolicySwarm, Replicas to struct + Input)
@@ -2249,22 +2291,24 @@ Define the two nested types at the bottom of `application.go`:
 
 ```go
 // HealthCheckSwarm mirrors Docker Swarm's HealthCheck object.
-// Durations are strings in Go-style format (e.g. "30s", "1m"); the server
-// converts to nanoseconds internally.
+// Durations are nanosecond integers (verified in Task 1 against the live API).
+// The provider converts user-facing Go-style strings ("30s") to nanoseconds
+// before populating these fields.
 type HealthCheckSwarm struct {
 	Test        []string `json:"Test,omitempty"`
-	Interval    string   `json:"Interval,omitempty"`
-	Timeout     string   `json:"Timeout,omitempty"`
+	Interval    int64    `json:"Interval,omitempty"`    // nanoseconds
+	Timeout     int64    `json:"Timeout,omitempty"`     // nanoseconds
 	Retries     int      `json:"Retries,omitempty"`
-	StartPeriod string   `json:"StartPeriod,omitempty"`
+	StartPeriod int64    `json:"StartPeriod,omitempty"` // nanoseconds
 }
 
 // RestartPolicySwarm mirrors Docker Swarm's RestartPolicy object.
+// Durations are nanosecond integers (same conversion rule as HealthCheckSwarm).
 type RestartPolicySwarm struct {
 	Condition   string `json:"Condition,omitempty"`
-	Delay       string `json:"Delay,omitempty"`
+	Delay       int64  `json:"Delay,omitempty"`  // nanoseconds
 	MaxAttempts int    `json:"MaxAttempts,omitempty"`
-	Window      string `json:"Window,omitempty"`
+	Window      int64  `json:"Window,omitempty"` // nanoseconds
 }
 ```
 
