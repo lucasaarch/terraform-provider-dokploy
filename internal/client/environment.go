@@ -18,14 +18,15 @@ type Environment struct {
 	Env string `json:"env"`
 }
 
-// EnvironmentInput is the writable payload for create/update.
-// All fields use omitempty so partial updates (e.g. env-only) do not send
-// empty strings that fail the server's Zod min-length validation.
+// EnvironmentInput is the writable payload for create/update. Name/Description/
+// ProjectID use omitempty so a partial update (e.g. env-only) skips them.
+// Env is sent unconditionally so removing all env vars from the Terraform
+// config actually clears them on the server.
 type EnvironmentInput struct {
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
 	ProjectID   string `json:"projectId,omitempty"`
-	Env         string `json:"env,omitempty"`
+	Env         string `json:"env"`
 }
 
 func (c *Client) CreateEnvironment(ctx context.Context, in EnvironmentInput) (*Environment, error) {

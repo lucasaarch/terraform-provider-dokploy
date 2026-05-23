@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -55,7 +56,7 @@ func (r *projectResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Project description.",
+				MarkdownDescription: "Project description. Note: once set, removing this attribute from the configuration does not clear the description on the server (the API silently keeps the existing value).",
 			},
 			"organization_id": schema.StringAttribute{
 				Computed:            true,
@@ -160,7 +161,27 @@ func (r *projectResource) Read(ctx context.Context, req resource.ReadRequest, re
 		state.Description = types.StringValue(proj.Description)
 	}
 	state.OrganizationID = types.StringValue(proj.OrganizationID)
-	state.ProductionEnvironmentID = types.StringValue(proj.ProductionEnvironmentID())
+	prodEnvID := proj.ProductionEnvironmentID()
+	state.ProductionEnvironmentID = types.StringValue(prodEnvID)
+
+	// Read production_env from the production environment so out-of-band
+	// changes to those variables show up as drift.
+	if prodEnvID != "" {
+		prodEnv, err := r.client.GetEnvironment(ctx, prodEnvID)
+		if err != nil {
+			resp.Diagnostics.AddError("Error reading production environment", err.Error())
+			return
+		}
+		if prodEnv.Env != "" {
+			envMap, diags := types.MapValueFrom(ctx, types.StringType, client.DotenvToMap(prodEnv.Env))
+			resp.Diagnostics.Append(diags...)
+			if !diags.HasError() {
+				state.ProductionEnv = envMap
+			}
+		} else if !state.ProductionEnv.IsNull() {
+			state.ProductionEnv = types.MapValueMust(types.StringType, map[string]attr.Value{})
+		}
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 

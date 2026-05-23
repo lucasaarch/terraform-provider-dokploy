@@ -40,7 +40,7 @@ resource "dokploy_application" "api" {
 
 ### Optional
 
-- `description` (String) Application description.
+- `description` (String) Application description. Note: once set, removing this attribute from the configuration does not clear the description on the server (the API silently keeps the existing value).
 - `env` (Map of String) Application environment variables.
 - `registry_password` (String, Sensitive) Registry password. Not returned by the API; drift on this field is not detected.
 - `registry_url` (String) Private registry URL. Omit for public images.

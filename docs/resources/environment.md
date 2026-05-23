@@ -34,7 +34,7 @@ resource "dokploy_environment" "staging" {
 
 ### Optional
 
-- `description` (String) Environment description.
+- `description` (String) Environment description. Note: once set, removing this attribute from the configuration does not clear the description on the server (the API silently keeps the existing value).
 - `env` (Map of String) Shared environment variables for all applications in this environment.
 
 ### Read-Only

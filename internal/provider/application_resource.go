@@ -75,7 +75,7 @@ func (r *applicationResource) Schema(ctx context.Context, _ resource.SchemaReque
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Application description.",
+				MarkdownDescription: "Application description. Note: once set, removing this attribute from the configuration does not clear the description on the server (the API silently keeps the existing value).",
 			},
 			"docker_image": schema.StringAttribute{
 				Required:            true,

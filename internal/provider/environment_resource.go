@@ -60,7 +60,7 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Environment description.",
+				MarkdownDescription: "Environment description. Note: once set, removing this attribute from the configuration does not clear the description on the server (the API silently keeps the existing value).",
 			},
 			"env": schema.MapAttribute{
 				Optional:            true,

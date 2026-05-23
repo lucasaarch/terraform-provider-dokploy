@@ -32,7 +32,7 @@ resource "dokploy_project" "app" {
 
 ### Optional
 
-- `description` (String) Project description.
+- `description` (String) Project description. Note: once set, removing this attribute from the configuration does not clear the description on the server (the API silently keeps the existing value).
 - `production_env` (Map of String) Shared environment variables for the auto-created `production` environment.
 
 ### Read-Only
