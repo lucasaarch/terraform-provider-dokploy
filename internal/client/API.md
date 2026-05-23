@@ -1996,3 +1996,346 @@ Deletes a schedule. **Endpoint is `.delete`** (confirmed working; unlike backup/
 ```
 
 **Response:** `200 application/json` — `true` (boolean literal).
+
+---
+
+## sshKey.*
+
+> Verified against live instance on 2026-05-23.
+
+SSH keys are registered at the **organization** level. Each key is identified by `sshKeyId`. Keys are used by `server.*` to authenticate SSH connections to remote machines.
+
+**Critical behavior: `sshKey.create` returns an empty body.** The created key's ID must be obtained from `sshKey.all` after creation (match by `name` + `createdAt`). This differs from most other create endpoints which return the created object.
+
+---
+
+### `GET /api/sshKey.all`
+
+Returns all SSH keys visible to the authenticated API key (across all accessible organizations).
+
+**Request:** no body, no query params.
+
+**Response:** `200 application/json` — array of SSH key objects.
+
+```json
+[
+  {
+    "sshKeyId": "0Y7QbwR0-NYV2cjREsPYY",
+    "name": "my-deploy-key",
+    "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----\n",
+    "publicKey": "ssh-rsa AAAAB3NzaC1yc2EAAA... user@host\n",
+    "description": null,
+    "createdAt": "2026-05-23T03:58:03.531Z",
+    "lastUsedAt": null,
+    "organizationId": "JYzDaUdW-hC0EX785HuXV"
+  }
+]
+```
+
+---
+
+### `GET /api/sshKey.one?sshKeyId=<id>`
+
+Returns a single SSH key with full details.
+
+**Query params:** `sshKeyId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "sshKeyId": "0Y7QbwR0-NYV2cjREsPYY",
+  "name": "my-deploy-key",
+  "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----\n",
+  "publicKey": "ssh-rsa AAAAB3NzaC1yc2EAAA... user@host\n",
+  "description": null,
+  "createdAt": "2026-05-23T03:58:03.531Z",
+  "lastUsedAt": null,
+  "organizationId": "JYzDaUdW-hC0EX785HuXV"
+}
+```
+
+**Complete field list:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `sshKeyId` | string | Primary key |
+| `name` | string | Display name |
+| `privateKey` | string | PEM-encoded private key — **returned in plaintext** |
+| `publicKey` | string | OpenSSH-format public key |
+| `description` | string\|null | Optional description |
+| `createdAt` | string | ISO 8601 timestamp |
+| `lastUsedAt` | string\|null | Last use timestamp (null if unused) |
+| `organizationId` | string | Owning organization ID |
+
+**Private key in read:** `privateKey` IS returned in plaintext by `sshKey.one` (and by `sshKey.all`). The Terraform provider Read method should overwrite the state value from the API response — no need to preserve the plan value (unlike `registry_password`). Mark the field as `Sensitive: true` in the schema.
+
+---
+
+### `POST /api/sshKey.create`
+
+Creates a new SSH key.
+
+**Request body:**
+```json
+{
+  "name": "my-deploy-key",
+  "organizationId": "JYzDaUdW-hC0EX785HuXV",
+  "publicKey": "ssh-rsa AAAAB3NzaC1yc2EAAA... user@host\n",
+  "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----\n"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `organizationId` | string | yes | Organization that will own the key |
+| `publicKey` | string | yes | OpenSSH-format public key |
+| `privateKey` | string | yes | PEM-encoded private key |
+
+**Response:** `200 application/json` — **empty body**. The created key is NOT returned inline; retrieve it from `sshKey.all` (match by `name` + `organizationId` + `createdAt`).
+
+**Warning:** This differs from other create endpoints. Callers must use `sshKey.all` after create to obtain the `sshKeyId`.
+
+---
+
+### `POST /api/sshKey.update`
+
+Updates an SSH key's name and/or description. **`name` is required alongside `sshKeyId`.**
+
+**Request body:**
+```json
+{
+  "sshKeyId": "0Y7QbwR0-NYV2cjREsPYY",
+  "name": "my-deploy-key-renamed",
+  "description": "optional description"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `sshKeyId` | string | yes | SSH key ID |
+| `name` | string | yes | New display name (required — omitting causes a backend error even though Zod passes) |
+| `description` | string | no | New description |
+
+**Note on `privateKey`/`publicKey` updates:** Sending `privateKey` or `publicKey` fields passes Zod validation but is rejected by the backend with HTTP 400 `"Error updating this SSH key"` (`zodError: null`). These fields cannot be changed via `sshKey.update` — to rotate keys, delete and recreate the resource.
+
+**Response:** `200 application/json` — the full updated SSH key object (same shape as `sshKey.one`).
+
+---
+
+### `POST /api/sshKey.remove`
+
+Deletes an SSH key. **Endpoint is `.remove`, not `.delete`** (`.delete` returns 404).
+
+**Request body:**
+```json
+{
+  "sshKeyId": "0Y7QbwR0-NYV2cjREsPYY"
+}
+```
+
+**Response:** `200 application/json` — the deleted SSH key object (same shape as `sshKey.one`).
+
+---
+
+## server.*
+
+> Verified against live instance on 2026-05-23.
+
+Servers are remote machines registered as managed workers in Dokploy. They are managed at the **organization** level (inferred from the SSH key used). Each server is identified by `serverId`.
+
+**SSH handshake behavior:** `server.create` returns HTTP 200 with the full server object immediately — the record is created synchronously. The actual SSH connectivity test runs asynchronously in the background. The `serverStatus` field reflects the connection state after the handshake completes.
+
+---
+
+### `GET /api/server.all`
+
+Returns all servers visible to the authenticated API key.
+
+**Request:** no body, no query params.
+
+**Response:** `200 application/json` — array of server objects (same shape as `server.one` without `deployments` and `sshKey` sub-objects).
+
+---
+
+### `GET /api/server.one?serverId=<id>`
+
+Returns a single server with full details.
+
+**Query params:** `serverId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "serverId": "7xq6PuwCfVaQ4tHNRYXUL",
+  "name": "my-worker",
+  "description": "",
+  "ipAddress": "1.2.3.4",
+  "port": 22,
+  "username": "root",
+  "appName": "server-compress-primary-microchip-9bcanv",
+  "enableDockerCleanup": false,
+  "createdAt": "2026-05-23T03:59:24.683Z",
+  "organizationId": "JYzDaUdW-hC0EX785HuXV",
+  "serverStatus": "active",
+  "serverType": "deploy",
+  "command": "",
+  "sshKeyId": "0Y7QbwR0-NYV2cjREsPYY",
+  "metricsConfig": {
+    "server": {
+      "port": 4500,
+      "type": "Remote",
+      "token": "",
+      "cronJob": "",
+      "thresholds": { "cpu": 0, "memory": 0 },
+      "refreshRate": 60,
+      "urlCallback": "",
+      "retentionDays": 2
+    },
+    "containers": {
+      "services": { "exclude": [], "include": [] },
+      "refreshRate": 60
+    }
+  },
+  "deployments": [],
+  "sshKey": {
+    "sshKeyId": "...",
+    "privateKey": "...",
+    "publicKey": "...",
+    "name": "...",
+    "description": null,
+    "createdAt": "...",
+    "lastUsedAt": null,
+    "organizationId": "..."
+  }
+}
+```
+
+**Complete top-level field list on server object:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `serverId` | string | Primary key |
+| `name` | string | Display name |
+| `description` | string | Description (empty string `""` is valid; NOT nullable — always present) |
+| `ipAddress` | string | IP or hostname |
+| `port` | integer | SSH port (typically 22) |
+| `username` | string | SSH username |
+| `appName` | string | Auto-generated internal name |
+| `enableDockerCleanup` | boolean | Whether Docker cleanup is enabled (defaults to `false`) |
+| `createdAt` | string | ISO 8601 timestamp |
+| `organizationId` | string | Owning organization (inferred from `sshKeyId` on create) |
+| `serverStatus` | string | Connectivity status: `"active"`, `"inactive"`, `"error"` |
+| `serverType` | string | `"deploy"` (runs workloads) or `"build"` (used as a build host) |
+| `command` | string | Custom setup command (empty string by default) |
+| `sshKeyId` | string | SSH key ID used for authentication |
+| `metricsConfig` | object | Metrics collection configuration |
+| `deployments` | array | Deployment history (only on `server.one`) |
+| `sshKey` | object | Embedded SSH key object (only on `server.one`; includes `privateKey` in plaintext) |
+
+---
+
+### `POST /api/server.create`
+
+Creates a new remote server record. The SSH handshake runs asynchronously after the record is created.
+
+**Request body:**
+```json
+{
+  "name": "my-worker",
+  "description": "",
+  "ipAddress": "1.2.3.4",
+  "port": 22,
+  "username": "root",
+  "sshKeyId": "0Y7QbwR0-NYV2cjREsPYY",
+  "serverType": "deploy"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `description` | string | yes | Description — **nonoptional** (Zod requires it present; pass `""` for empty) |
+| `ipAddress` | string | yes | IP or hostname |
+| `port` | number | yes | SSH port |
+| `username` | string | yes | SSH username (nonoptional) |
+| `sshKeyId` | string | yes | SSH key ID (nonoptional) |
+| `serverType` | string | yes | `"deploy"` or `"build"` (nonoptional) |
+
+**Note:** `organizationId` is NOT required in the body — it is inferred server-side from the SSH key's organization.
+
+**Response:** `200 application/json` — the full created server object (same shape as `server.one` minus `deployments` and `sshKey` sub-objects). The `serverStatus` is `"active"` immediately on create; the async SSH test may change it later.
+
+---
+
+### `POST /api/server.update`
+
+Updates a server record. **All create fields are required** (not a partial update).
+
+**Request body:**
+```json
+{
+  "serverId": "7xq6PuwCfVaQ4tHNRYXUL",
+  "name": "my-worker-renamed",
+  "description": "",
+  "ipAddress": "1.2.3.4",
+  "port": 22,
+  "username": "root",
+  "sshKeyId": "0Y7QbwR0-NYV2cjREsPYY",
+  "serverType": "deploy"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `serverId` | string | yes | Server ID (nonoptional) |
+| `name` | string | yes | Display name |
+| `description` | string | yes | Description (nonoptional — pass `""` for empty) |
+| `ipAddress` | string | yes | IP or hostname |
+| `port` | number | yes | SSH port |
+| `username` | string | yes | SSH username (nonoptional) |
+| `sshKeyId` | string | yes | SSH key ID (nonoptional) |
+| `serverType` | string | yes | `"deploy"` or `"build"` (nonoptional) |
+
+**Response:** HTTP status unknown at probe time — returns the updated server object or `true`.
+
+---
+
+### `POST /api/server.remove`
+
+Deletes a server. **Endpoint is `.remove`, not `.delete`** (`.delete` returns 404).
+
+**Request body:**
+```json
+{
+  "serverId": "7xq6PuwCfVaQ4tHNRYXUL"
+}
+```
+
+**Response:** `200 application/json` — the deleted server object.
+
+---
+
+## server_id field on existing routers
+
+> Verified against live instance on 2026-05-23.
+
+All five database routers accept `serverId` as an optional field on both `create` and (by extension) `update`. When `serverId` is provided, the database service is deployed onto the specified remote server rather than the Dokploy host.
+
+### `serverId` on DB create endpoints
+
+The probe sent `{"name":"tf-probe","appName":"tf-probe","environmentId":"nope","dockerImage":"none","serverId":"nope"}` to each DB create endpoint and inspected the Zod validation error. In every case, `serverId` did NOT appear in `fieldErrors` — confirming Zod accepts the field. The `fieldErrors` only complained about missing DB-specific required fields.
+
+| Router | `serverId` accepted on create? | Zod errors on probe body |
+|--------|-------------------------------|--------------------------|
+| `postgres.create` | **yes** | `databaseName`, `databaseUser`, `databasePassword` |
+| `mysql.create` | **yes** | `databaseName`, `databaseUser`, `databasePassword` |
+| `mariadb.create` | **yes** | `databaseName`, `databaseUser`, `databasePassword` |
+| `mongo.create` | **yes** | `databaseUser`, `databasePassword` |
+| `redis.create` | **yes** | `databasePassword` |
+
+**All 5 database routers accept `serverId`.** The field is present on the `*.one` responses as `"serverId": null` when unused (confirmed in v0.3 probes — see DB sections above).
+
+**Implementation note:** Add an Optional `server_id` attribute (ForceNew) to each of the five database resource schemas. The field maps to `serverId` in the create/update body. Since the DB `*.one` endpoints already return `serverId`, the Read method can populate it from the API response without special handling.
