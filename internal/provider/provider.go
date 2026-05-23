@@ -106,6 +106,7 @@ func (p *dokployProvider) Resources(_ context.Context) []func() resource.Resourc
 		NewRedisResource,
 		NewDestinationResource,
 		NewBackupResource,
+		NewApplicationScheduleResource,
 	}
 }
 
