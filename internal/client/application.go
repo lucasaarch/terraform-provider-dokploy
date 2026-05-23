@@ -21,16 +21,18 @@ type Application struct {
 	ApplicationStatus string   `json:"applicationStatus"`
 	Env               string   `json:"env"`
 	Backups           []Backup `json:"backups"`
+	ServerID          *string  `json:"serverId"`
 }
 
 // ApplicationInput is the application.create payload. appName is required by
 // the API; Dokploy appends a random suffix to it. For application.update only
 // Name/Description are sent (AppName/EnvironmentID omitted via omitempty).
 type ApplicationInput struct {
-	Name          string `json:"name"`
-	AppName       string `json:"appName,omitempty"`
-	Description   string `json:"description,omitempty"`
-	EnvironmentID string `json:"environmentId,omitempty"`
+	Name          string  `json:"name"`
+	AppName       string  `json:"appName,omitempty"`
+	Description   string  `json:"description,omitempty"`
+	EnvironmentID string  `json:"environmentId,omitempty"`
+	ServerID      *string `json:"serverId,omitempty"`
 }
 
 // DockerProviderInput configures the Docker image source. The API's Zod schema

@@ -38,6 +38,7 @@ type mongoModel struct {
 	DatabasePassword types.String   `tfsdk:"database_password"`
 	AppName          types.String   `tfsdk:"app_name"`
 	Status           types.String   `tfsdk:"status"`
+	ServerID         types.String   `tfsdk:"server_id"`
 	Timeouts         timeouts.Value `tfsdk:"timeouts"`
 }
 
@@ -63,7 +64,16 @@ func (r *mongoResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"app_name": schema.StringAttribute{Computed: true, MarkdownDescription: "Internal service name (Dokploy-generated).", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
-			"status":   schema.StringAttribute{Computed: true, MarkdownDescription: "Status of the most recent deploy."},
+			"server_id": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Managed server (`dokploy_server.x.id`) the database runs on. Omit to run on the Dokploy host. Changing this forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"status": schema.StringAttribute{Computed: true, MarkdownDescription: "Status of the most recent deploy."},
 		},
 		Blocks: map[string]schema.Block{
 			"timeouts": timeouts.Block(ctx, timeouts.Opts{Create: true, Update: true}),
@@ -110,6 +120,7 @@ func (r *mongoResource) Create(ctx context.Context, req resource.CreateRequest, 
 		DatabasePassword: password,
 		ExternalPort:     int(plan.ExternalPort.ValueInt64()),
 		Env:              envStr,
+		ServerID:         optionalString(plan.ServerID),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating mongo", err.Error())
@@ -118,6 +129,11 @@ func (r *mongoResource) Create(ctx context.Context, req resource.CreateRequest, 
 	plan.ID = types.StringValue(mo.ID)
 	plan.AppName = types.StringValue(mo.AppName)
 	plan.DatabasePassword = types.StringValue(password)
+	if mo.ServerID != nil {
+		plan.ServerID = types.StringValue(*mo.ServerID)
+	} else if plan.ServerID.IsUnknown() {
+		plan.ServerID = types.StringNull()
+	}
 
 	deployFn := func(ctx context.Context) error { return r.client.DeployMongo(ctx, mo.ID) }
 	statusFn := func(ctx context.Context) (string, error) {
@@ -166,6 +182,11 @@ func (r *mongoResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	}
 	if mo.ExternalPort != 0 || !state.ExternalPort.IsNull() {
 		state.ExternalPort = types.Int64Value(int64(mo.ExternalPort))
+	}
+	if mo.ServerID != nil {
+		state.ServerID = types.StringValue(*mo.ServerID)
+	} else {
+		state.ServerID = types.StringNull()
 	}
 	if mo.Env != "" {
 		envMap, diags := types.MapValueFrom(ctx, types.StringType, client.DotenvToMap(mo.Env))

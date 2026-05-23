@@ -40,6 +40,7 @@ type mariadbModel struct {
 	DatabaseRootPassword types.String   `tfsdk:"database_root_password"`
 	AppName              types.String   `tfsdk:"app_name"`
 	Status               types.String   `tfsdk:"status"`
+	ServerID             types.String   `tfsdk:"server_id"`
 	Timeouts             timeouts.Value `tfsdk:"timeouts"`
 }
 
@@ -71,7 +72,16 @@ func (r *mariadbResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"app_name": schema.StringAttribute{Computed: true, MarkdownDescription: "Internal service name (Dokploy-generated).", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
-			"status":   schema.StringAttribute{Computed: true, MarkdownDescription: "Status of the most recent deploy."},
+			"server_id": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Managed server (`dokploy_server.x.id`) the database runs on. Omit to run on the Dokploy host. Changing this forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"status": schema.StringAttribute{Computed: true, MarkdownDescription: "Status of the most recent deploy."},
 		},
 		Blocks: map[string]schema.Block{
 			"timeouts": timeouts.Block(ctx, timeouts.Opts{Create: true, Update: true}),
@@ -121,6 +131,7 @@ func (r *mariadbResource) Create(ctx context.Context, req resource.CreateRequest
 		DatabaseRootPassword: rootPassword,
 		ExternalPort:         int(plan.ExternalPort.ValueInt64()),
 		Env:                  envStr,
+		ServerID:             optionalString(plan.ServerID),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating mariadb", err.Error())
@@ -130,6 +141,11 @@ func (r *mariadbResource) Create(ctx context.Context, req resource.CreateRequest
 	plan.AppName = types.StringValue(ma.AppName)
 	plan.DatabasePassword = types.StringValue(password)
 	plan.DatabaseRootPassword = types.StringValue(rootPassword)
+	if ma.ServerID != nil {
+		plan.ServerID = types.StringValue(*ma.ServerID)
+	} else if plan.ServerID.IsUnknown() {
+		plan.ServerID = types.StringNull()
+	}
 
 	deployFn := func(ctx context.Context) error { return r.client.DeployMariadb(ctx, ma.ID) }
 	statusFn := func(ctx context.Context) (string, error) {
@@ -182,6 +198,11 @@ func (r *mariadbResource) Read(ctx context.Context, req resource.ReadRequest, re
 	}
 	if ma.ExternalPort != 0 || !state.ExternalPort.IsNull() {
 		state.ExternalPort = types.Int64Value(int64(ma.ExternalPort))
+	}
+	if ma.ServerID != nil {
+		state.ServerID = types.StringValue(*ma.ServerID)
+	} else {
+		state.ServerID = types.StringNull()
 	}
 	if ma.Env != "" {
 		envMap, diags := types.MapValueFrom(ctx, types.StringType, client.DotenvToMap(ma.Env))

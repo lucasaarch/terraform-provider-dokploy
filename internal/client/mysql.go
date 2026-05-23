@@ -22,21 +22,23 @@ type Mysql struct {
 	Env                  string   `json:"env"`
 	ApplicationStatus    string   `json:"applicationStatus"`
 	Backups              []Backup `json:"backups"`
+	ServerID             *string  `json:"serverId"`
 }
 
 // MysqlInput is the create/update payload.
 type MysqlInput struct {
-	Name                 string `json:"name"`
-	AppName              string `json:"appName,omitempty"`
-	Description          string `json:"description,omitempty"`
-	EnvironmentID        string `json:"environmentId,omitempty"`
-	DockerImage          string `json:"dockerImage,omitempty"`
-	DatabaseName         string `json:"databaseName,omitempty"`
-	DatabaseUser         string `json:"databaseUser,omitempty"`
-	DatabasePassword     string `json:"databasePassword,omitempty"`
-	DatabaseRootPassword string `json:"databaseRootPassword,omitempty"`
-	ExternalPort         int    `json:"externalPort,omitempty"`
-	Env                  string `json:"env,omitempty"`
+	Name                 string  `json:"name"`
+	AppName              string  `json:"appName,omitempty"`
+	Description          string  `json:"description,omitempty"`
+	EnvironmentID        string  `json:"environmentId,omitempty"`
+	DockerImage          string  `json:"dockerImage,omitempty"`
+	DatabaseName         string  `json:"databaseName,omitempty"`
+	DatabaseUser         string  `json:"databaseUser,omitempty"`
+	DatabasePassword     string  `json:"databasePassword,omitempty"`
+	DatabaseRootPassword string  `json:"databaseRootPassword,omitempty"`
+	ExternalPort         int     `json:"externalPort,omitempty"`
+	Env                  string  `json:"env,omitempty"`
+	ServerID             *string `json:"serverId,omitempty"`
 }
 
 func (c *Client) CreateMysql(ctx context.Context, in MysqlInput) (*Mysql, error) {

@@ -41,6 +41,7 @@ type postgresModel struct {
 	DatabasePassword types.String   `tfsdk:"database_password"`
 	AppName          types.String   `tfsdk:"app_name"`
 	Status           types.String   `tfsdk:"status"`
+	ServerID         types.String   `tfsdk:"server_id"`
 	Timeouts         timeouts.Value `tfsdk:"timeouts"`
 }
 
@@ -102,6 +103,15 @@ func (r *postgresResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				MarkdownDescription: "Internal service name (Dokploy-generated). Use this as the hostname from other services inside Dokploy's network.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
+			"server_id": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Managed server (`dokploy_server.x.id`) the database runs on. Omit to run on the Dokploy host. Changing this forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"status": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Status of the most recent deploy.",
@@ -157,6 +167,7 @@ func (r *postgresResource) Create(ctx context.Context, req resource.CreateReques
 		DatabasePassword: password,
 		ExternalPort:     int(plan.ExternalPort.ValueInt64()),
 		Env:              envStr,
+		ServerID:         optionalString(plan.ServerID),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating postgres", err.Error())
@@ -166,6 +177,11 @@ func (r *postgresResource) Create(ctx context.Context, req resource.CreateReques
 	plan.ID = types.StringValue(pg.ID)
 	plan.AppName = types.StringValue(pg.AppName)
 	plan.DatabasePassword = types.StringValue(password)
+	if pg.ServerID != nil {
+		plan.ServerID = types.StringValue(*pg.ServerID)
+	} else if plan.ServerID.IsUnknown() {
+		plan.ServerID = types.StringNull()
+	}
 
 	deployFn := func(ctx context.Context) error {
 		return r.client.DeployPostgres(ctx, pg.ID)
@@ -220,6 +236,11 @@ func (r *postgresResource) Read(ctx context.Context, req resource.ReadRequest, r
 	}
 	if pg.ExternalPort != 0 || !state.ExternalPort.IsNull() {
 		state.ExternalPort = types.Int64Value(int64(pg.ExternalPort))
+	}
+	if pg.ServerID != nil {
+		state.ServerID = types.StringValue(*pg.ServerID)
+	} else {
+		state.ServerID = types.StringNull()
 	}
 	if pg.Env != "" {
 		envMap, diags := types.MapValueFrom(ctx, types.StringType, client.DotenvToMap(pg.Env))

@@ -40,6 +40,7 @@ type mysqlModel struct {
 	DatabaseRootPassword types.String   `tfsdk:"database_root_password"`
 	AppName              types.String   `tfsdk:"app_name"`
 	Status               types.String   `tfsdk:"status"`
+	ServerID             types.String   `tfsdk:"server_id"`
 	Timeouts             timeouts.Value `tfsdk:"timeouts"`
 }
 
@@ -71,7 +72,16 @@ func (r *mysqlResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"app_name": schema.StringAttribute{Computed: true, MarkdownDescription: "Internal service name (Dokploy-generated).", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
-			"status":   schema.StringAttribute{Computed: true, MarkdownDescription: "Status of the most recent deploy."},
+			"server_id": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Managed server (`dokploy_server.x.id`) the database runs on. Omit to run on the Dokploy host. Changing this forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"status": schema.StringAttribute{Computed: true, MarkdownDescription: "Status of the most recent deploy."},
 		},
 		Blocks: map[string]schema.Block{
 			"timeouts": timeouts.Block(ctx, timeouts.Opts{Create: true, Update: true}),
@@ -122,6 +132,7 @@ func (r *mysqlResource) Create(ctx context.Context, req resource.CreateRequest, 
 		DatabaseRootPassword: rootPassword,
 		ExternalPort:         int(plan.ExternalPort.ValueInt64()),
 		Env:                  envStr,
+		ServerID:             optionalString(plan.ServerID),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating mysql", err.Error())
@@ -131,6 +142,11 @@ func (r *mysqlResource) Create(ctx context.Context, req resource.CreateRequest, 
 	plan.AppName = types.StringValue(my.AppName)
 	plan.DatabasePassword = types.StringValue(password)
 	plan.DatabaseRootPassword = types.StringValue(rootPassword)
+	if my.ServerID != nil {
+		plan.ServerID = types.StringValue(*my.ServerID)
+	} else if plan.ServerID.IsUnknown() {
+		plan.ServerID = types.StringNull()
+	}
 
 	deployFn := func(ctx context.Context) error { return r.client.DeployMysql(ctx, my.ID) }
 	statusFn := func(ctx context.Context) (string, error) {
@@ -183,6 +199,11 @@ func (r *mysqlResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	}
 	if my.ExternalPort != 0 || !state.ExternalPort.IsNull() {
 		state.ExternalPort = types.Int64Value(int64(my.ExternalPort))
+	}
+	if my.ServerID != nil {
+		state.ServerID = types.StringValue(*my.ServerID)
+	} else {
+		state.ServerID = types.StringNull()
 	}
 	if my.Env != "" {
 		envMap, diags := types.MapValueFrom(ctx, types.StringType, client.DotenvToMap(my.Env))

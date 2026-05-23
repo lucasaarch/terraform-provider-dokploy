@@ -69,3 +69,26 @@ func TestWaitForDeployment_ErrorStatusFails(t *testing.T) {
 		t.Fatal("expected error for failed deployment, got nil")
 	}
 }
+
+func TestCreateApplication_WithServerID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body ApplicationInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.ServerID == nil || *body.ServerID != "srv1" {
+			t.Errorf("serverId not sent: body = %+v", body)
+		}
+		_ = json.NewEncoder(w).Encode(Application{ID: "app1", Name: body.Name})
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "k")
+	srvID := "srv1"
+	_, err := c.CreateApplication(context.Background(), ApplicationInput{
+		Name:          "api",
+		AppName:       "api",
+		EnvironmentID: "env",
+		ServerID:      &srvID,
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication() error = %v", err)
+	}
+}
