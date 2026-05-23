@@ -721,6 +721,705 @@ Deletes a domain.
 
 ---
 
+## postgres.*
+
+> Verified against live instance on 2026-05-22.
+
+**Note on `postgres.all`:** This endpoint does NOT exist (returns 404). Postgres instances are listed via `project.one` or `environment.one` (the `postgres` array on each environment object).
+
+### `GET /api/postgres.one?postgresId=<id>`
+
+Returns a single postgres instance with full details including mounts, environment, and backups.
+
+**Query params:** `postgresId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "postgresId": "nrxOqifKRRjXfU2P42Whu",
+  "name": "my-postgres",
+  "appName": "my-postgres-hlbgau",
+  "description": null,
+  "databaseName": "probedb",
+  "databaseUser": "probeuser",
+  "databasePassword": "probepass1234",
+  "dockerImage": "postgres:18",
+  "command": null,
+  "args": null,
+  "env": null,
+  "externalPort": null,
+  "memoryReservation": null,
+  "memoryLimit": null,
+  "cpuReservation": null,
+  "cpuLimit": null,
+  "replicas": 1,
+  "applicationStatus": "done",
+  "createdAt": "2026-05-23T01:32:44.116Z",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "serverId": null,
+  "healthCheckSwarm": null,
+  "restartPolicySwarm": null,
+  "placementSwarm": null,
+  "updateConfigSwarm": null,
+  "rollbackConfigSwarm": null,
+  "modeSwarm": null,
+  "labelsSwarm": null,
+  "networkSwarm": null,
+  "stopGracePeriodSwarm": null,
+  "endpointSpecSwarm": null,
+  "ulimitsSwarm": null,
+  "environment": {
+    "environmentId": "...",
+    "name": "production",
+    "projectId": "...",
+    "isDefault": true,
+    "project": { "...": "..." }
+  },
+  "mounts": [
+    {
+      "mountId": "uRfv9BwzL52wxjhFxnJKH",
+      "type": "volume",
+      "volumeName": "my-postgres-hlbgau-data",
+      "mountPath": "/var/lib/postgresql/18/docker",
+      "serviceType": "postgres",
+      "postgresId": "nrxOqifKRRjXfU2P42Whu"
+    }
+  ],
+  "server": null,
+  "backups": []
+}
+```
+
+**Password in read:** `databasePassword` IS returned in plaintext by `postgres.one`. The Terraform provider must treat this field as sensitive and use the state value for drift detection.
+
+---
+
+### `POST /api/postgres.create`
+
+Creates a new postgres database service.
+
+**Request body:**
+```json
+{
+  "name": "my-postgres",
+  "appName": "my-postgres",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "databaseName": "mydb",
+  "databaseUser": "myuser",
+  "databasePassword": "mypassword"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `appName` | string | yes | Docker service name (auto-suffixed with random chars, e.g. `my-postgres-hlbgau`) |
+| `environmentId` | string | yes | Parent environment ID |
+| `databaseName` | string | yes | Name of the default database to create |
+| `databaseUser` | string | yes | Database superuser name |
+| `databasePassword` | string | yes | Database superuser password |
+| `description` | string | no | Optional description |
+| `dockerImage` | string | no | Defaults to `postgres:18` if omitted |
+
+**Response:** `200 application/json` — the created postgres object (same shape as `postgres.one` minus the `environment`, `mounts`, `server`, `backups` sub-objects).
+
+---
+
+### `POST /api/postgres.update`
+
+Updates a postgres instance's configuration.
+
+**Request body:**
+```json
+{
+  "postgresId": "nrxOqifKRRjXfU2P42Whu",
+  "description": "updated description",
+  "externalPort": 5432,
+  "dockerImage": "postgres:16",
+  "env": "PGDATA=/data",
+  "command": null
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `postgresId` | string | yes | ID of the postgres instance to update |
+| any other field | varies | no | Any writable field from the postgres object |
+
+**Response:** `200 application/json` — `true` (boolean).
+
+---
+
+### `POST /api/postgres.deploy`
+
+Triggers a deployment (container start/restart) for a postgres instance.
+
+**Request body:**
+```json
+{
+  "postgresId": "nrxOqifKRRjXfU2P42Whu"
+}
+```
+
+**Response:** `200 application/json` — the **full postgres object** (same shape as `postgres.one`) with `applicationStatus` reflecting the state at the moment the deploy was enqueued (typically `idle` or `running`). Poll `postgres.one` until `applicationStatus` is `done` or `error`.
+
+**Key difference from `application.deploy`:** Database deploy returns the full object; application deploy returns an empty body.
+
+---
+
+### `POST /api/postgres.remove`
+
+Deletes a postgres instance and its associated volumes.
+
+**Request body:**
+```json
+{
+  "postgresId": "nrxOqifKRRjXfU2P42Whu"
+}
+```
+
+**Response:** `200 application/json` — the deleted postgres object.
+
+---
+
+### Observed `applicationStatus` transitions (postgres)
+
+| Transition | Status |
+|-----------|--------|
+| After `postgres.create` | `idle` |
+| Immediately after `postgres.deploy` | `idle` (deploy is async; status updates server-side) |
+| After deploy completes (postgres:18, ~3–5s) | `done` |
+| After deploy fails | `error` |
+
+---
+
+## mysql.*
+
+> Verified against live instance on 2026-05-22.
+
+**Note on `mysql.all`:** Does NOT exist (returns 404). MySQL instances are listed via `project.one` or `environment.one` (the `mysql` array).
+
+### `GET /api/mysql.one?mysqlId=<id>`
+
+Returns a single mysql instance.
+
+**Query params:** `mysqlId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "mysqlId": "6ExRn6o2bsiX2c_7c2CZQ",
+  "name": "my-mysql",
+  "appName": "my-mysql-iykhey",
+  "description": null,
+  "databaseName": "mydb",
+  "databaseUser": "myuser",
+  "databasePassword": "mypassword",
+  "databaseRootPassword": "fhkymm6ximwldgwj",
+  "dockerImage": "mysql:8",
+  "command": null,
+  "args": null,
+  "env": null,
+  "externalPort": null,
+  "memoryReservation": null,
+  "memoryLimit": null,
+  "cpuReservation": null,
+  "cpuLimit": null,
+  "replicas": 1,
+  "applicationStatus": "done",
+  "createdAt": "2026-05-23T01:32:52.618Z",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "serverId": null,
+  "healthCheckSwarm": null,
+  "restartPolicySwarm": null,
+  "placementSwarm": null,
+  "updateConfigSwarm": null,
+  "rollbackConfigSwarm": null,
+  "modeSwarm": null,
+  "labelsSwarm": null,
+  "networkSwarm": null,
+  "stopGracePeriodSwarm": null,
+  "endpointSpecSwarm": null,
+  "ulimitsSwarm": null,
+  "environment": { "...": "..." },
+  "mounts": [
+    {
+      "mountId": "1wFwkUSVqRoecOVcN21P4",
+      "type": "volume",
+      "volumeName": "my-mysql-iykhey-data",
+      "mountPath": "/var/lib/mysql",
+      "serviceType": "mysql",
+      "mysqlId": "6ExRn6o2bsiX2c_7c2CZQ"
+    }
+  ],
+  "server": null,
+  "backups": []
+}
+```
+
+**Password in read:** Both `databasePassword` and `databaseRootPassword` ARE returned in plaintext by `mysql.one`. Treat both as sensitive.
+
+**`databaseRootPassword` note:** If not supplied on create, Dokploy auto-generates a random root password. The generated value is returned in the create response and by `mysql.one`.
+
+---
+
+### `POST /api/mysql.create`
+
+**Request body:**
+```json
+{
+  "name": "my-mysql",
+  "appName": "my-mysql",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "databaseName": "mydb",
+  "databaseUser": "myuser",
+  "databasePassword": "mypassword"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `appName` | string | yes | Docker service name (auto-suffixed) |
+| `environmentId` | string | yes | Parent environment ID |
+| `databaseName` | string | yes | Database name |
+| `databaseUser` | string | yes | MySQL user name |
+| `databasePassword` | string | yes | MySQL user password |
+| `databaseRootPassword` | string | no | Root password — auto-generated if omitted |
+| `description` | string | no | Optional description |
+| `dockerImage` | string | no | Defaults to `mysql:8` |
+
+**Response:** `200 application/json` — the created mysql object (includes auto-generated `databaseRootPassword`).
+
+---
+
+### `POST /api/mysql.update`
+
+**Request body:**
+```json
+{
+  "mysqlId": "6ExRn6o2bsiX2c_7c2CZQ",
+  "description": "updated",
+  "externalPort": 3306
+}
+```
+
+**Response:** `200 application/json` — `true`.
+
+---
+
+### `POST /api/mysql.deploy`
+
+**Request body:** `{ "mysqlId": "6ExRn6o2bsiX2c_7c2CZQ" }`
+
+**Response:** `200 application/json` — full mysql object (same as `mysql.one`). Poll until `applicationStatus` is `done` or `error`.
+
+---
+
+### `POST /api/mysql.remove`
+
+**Request body:** `{ "mysqlId": "6ExRn6o2bsiX2c_7c2CZQ" }`
+
+**Response:** `200 application/json` — the deleted mysql object.
+
+---
+
+## mariadb.*
+
+> Verified against live instance on 2026-05-22.
+
+**Note on `mariadb.all`:** Does NOT exist (returns 404). MariaDB instances are listed via `project.one` or `environment.one` (the `mariadb` array).
+
+### `GET /api/mariadb.one?mariadbId=<id>`
+
+**Query params:** `mariadbId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "mariadbId": "SfJMoi2CiK0_03YiYg6hx",
+  "name": "my-mariadb",
+  "appName": "my-mariadb-ot1nlc",
+  "description": null,
+  "databaseName": "mydb",
+  "databaseUser": "myuser",
+  "databasePassword": "mypassword",
+  "databaseRootPassword": "hj88fnieewxo0acx",
+  "dockerImage": "mariadb:11",
+  "command": null,
+  "args": null,
+  "env": null,
+  "externalPort": null,
+  "memoryReservation": null,
+  "memoryLimit": null,
+  "cpuReservation": null,
+  "cpuLimit": null,
+  "replicas": 1,
+  "applicationStatus": "done",
+  "createdAt": "2026-05-23T01:32:59.155Z",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "serverId": null,
+  "healthCheckSwarm": null,
+  "restartPolicySwarm": null,
+  "placementSwarm": null,
+  "updateConfigSwarm": null,
+  "rollbackConfigSwarm": null,
+  "modeSwarm": null,
+  "labelsSwarm": null,
+  "networkSwarm": null,
+  "stopGracePeriodSwarm": null,
+  "endpointSpecSwarm": null,
+  "ulimitsSwarm": null,
+  "environment": { "...": "..." },
+  "mounts": [
+    {
+      "mountId": "Of_sJqbowYSXSV6I-Rf5-",
+      "type": "volume",
+      "volumeName": "my-mariadb-ot1nlc-data",
+      "mountPath": "/var/lib/mysql",
+      "serviceType": "mariadb",
+      "mariadbId": "SfJMoi2CiK0_03YiYg6hx"
+    }
+  ],
+  "server": null,
+  "backups": []
+}
+```
+
+**Password in read:** Both `databasePassword` and `databaseRootPassword` ARE returned in plaintext by `mariadb.one`. Treat both as sensitive.
+
+**`databaseRootPassword` note:** Auto-generated if not supplied on create (same as mysql).
+
+**Default image caution:** The server's default image is `mariadb:6` which does not exist on Docker Hub. Always supply `dockerImage` on create (use `mariadb:11` or later).
+
+---
+
+### `POST /api/mariadb.create`
+
+**Request body:**
+```json
+{
+  "name": "my-mariadb",
+  "appName": "my-mariadb",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "databaseName": "mydb",
+  "databaseUser": "myuser",
+  "databasePassword": "mypassword",
+  "dockerImage": "mariadb:11"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `appName` | string | yes | Docker service name (auto-suffixed) |
+| `environmentId` | string | yes | Parent environment ID |
+| `databaseName` | string | yes | Database name |
+| `databaseUser` | string | yes | MariaDB user name |
+| `databasePassword` | string | yes | MariaDB user password |
+| `databaseRootPassword` | string | no | Root password — auto-generated if omitted |
+| `dockerImage` | string | **strongly recommended** | Default `mariadb:6` is invalid; always pass `mariadb:11` or later |
+| `description` | string | no | Optional description |
+
+**Response:** `200 application/json` — the created mariadb object (includes auto-generated `databaseRootPassword`).
+
+---
+
+### `POST /api/mariadb.update`
+
+**Request body:**
+```json
+{
+  "mariadbId": "SfJMoi2CiK0_03YiYg6hx",
+  "description": "updated",
+  "externalPort": 3307,
+  "dockerImage": "mariadb:11"
+}
+```
+
+**Response:** `200 application/json` — `true`.
+
+---
+
+### `POST /api/mariadb.deploy`
+
+**Request body:** `{ "mariadbId": "SfJMoi2CiK0_03YiYg6hx" }`
+
+**Response:** `200 application/json` — full mariadb object. Poll until `applicationStatus` is `done` or `error`.
+
+---
+
+### `POST /api/mariadb.remove`
+
+**Request body:** `{ "mariadbId": "SfJMoi2CiK0_03YiYg6hx" }`
+
+**Response:** `200 application/json` — the deleted mariadb object.
+
+---
+
+## mongo.*
+
+> Verified against live instance on 2026-05-22.
+
+**Note on `mongo.all`:** Does NOT exist (returns 404). MongoDB instances are listed via `project.one` or `environment.one` (the `mongo` array).
+
+**Schema difference:** MongoDB does NOT have a `databaseName` field. The create/one response only has `databaseUser` and `databasePassword` (plus `replicaSets`). This differs from the postgres/mysql/mariadb pattern.
+
+### `GET /api/mongo.one?mongoId=<id>`
+
+**Query params:** `mongoId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "mongoId": "1ZU67MtuBacO2Su9_8J1s",
+  "name": "my-mongo",
+  "appName": "my-mongo-p4xnti",
+  "description": null,
+  "databaseUser": "myuser",
+  "databasePassword": "mypassword",
+  "replicaSets": false,
+  "dockerImage": "mongo:7",
+  "command": null,
+  "args": null,
+  "env": null,
+  "externalPort": null,
+  "memoryReservation": null,
+  "memoryLimit": null,
+  "cpuReservation": null,
+  "cpuLimit": null,
+  "replicas": 1,
+  "applicationStatus": "done",
+  "createdAt": "2026-05-23T01:32:59.627Z",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "serverId": null,
+  "healthCheckSwarm": null,
+  "restartPolicySwarm": null,
+  "placementSwarm": null,
+  "updateConfigSwarm": null,
+  "rollbackConfigSwarm": null,
+  "modeSwarm": null,
+  "labelsSwarm": null,
+  "networkSwarm": null,
+  "stopGracePeriodSwarm": null,
+  "endpointSpecSwarm": null,
+  "ulimitsSwarm": null,
+  "environment": { "...": "..." },
+  "mounts": [
+    {
+      "mountId": "MVazoltO0jtbcbtn7uTNe",
+      "type": "volume",
+      "volumeName": "my-mongo-p4xnti-data",
+      "mountPath": "/data/db",
+      "serviceType": "mongo",
+      "mongoId": "1ZU67MtuBacO2Su9_8J1s"
+    }
+  ],
+  "server": null,
+  "backups": []
+}
+```
+
+**Password in read:** `databasePassword` IS returned in plaintext by `mongo.one`. Treat as sensitive.
+
+**No `databaseName`:** MongoDB does not use a `databaseName` field. Do not include it in create/update bodies.
+
+**Default image caution:** The server's default image is `mongo:15` which does not exist on Docker Hub. Always supply `dockerImage` on create (use `mongo:7` or `mongo:8`).
+
+---
+
+### `POST /api/mongo.create`
+
+**Request body:**
+```json
+{
+  "name": "my-mongo",
+  "appName": "my-mongo",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "databaseUser": "myuser",
+  "databasePassword": "mypassword",
+  "dockerImage": "mongo:7"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `appName` | string | yes | Docker service name (auto-suffixed) |
+| `environmentId` | string | yes | Parent environment ID |
+| `databaseUser` | string | yes | MongoDB admin user name |
+| `databasePassword` | string | yes | MongoDB admin password |
+| `replicaSets` | boolean | no | Enable replica sets — defaults to `false` |
+| `dockerImage` | string | **strongly recommended** | Default `mongo:15` is invalid; always pass `mongo:7` or later |
+| `description` | string | no | Optional description |
+
+**Note:** There is no `databaseName` field for MongoDB — the auth database is always `admin` in this deployment model.
+
+**Response:** `200 application/json` — the created mongo object.
+
+---
+
+### `POST /api/mongo.update`
+
+**Request body:**
+```json
+{
+  "mongoId": "1ZU67MtuBacO2Su9_8J1s",
+  "description": "updated",
+  "externalPort": 27018,
+  "replicaSets": false
+}
+```
+
+**Response:** `200 application/json` — `true`.
+
+---
+
+### `POST /api/mongo.deploy`
+
+**Request body:** `{ "mongoId": "1ZU67MtuBacO2Su9_8J1s" }`
+
+**Response:** `200 application/json` — full mongo object. Poll until `applicationStatus` is `done` or `error`.
+
+---
+
+### `POST /api/mongo.remove`
+
+**Request body:** `{ "mongoId": "1ZU67MtuBacO2Su9_8J1s" }`
+
+**Response:** `200 application/json` — the deleted mongo object.
+
+---
+
+## redis.*
+
+> Verified against live instance on 2026-05-22.
+
+**Note on `redis.all`:** Does NOT exist (returns 404). Redis instances are listed via `project.one` or `environment.one` (the `redis` array).
+
+**Schema difference:** Redis only has `databasePassword` — there is no `databaseName` or `databaseUser`. This is the simplest database schema.
+
+### `GET /api/redis.one?redisId=<id>`
+
+**Query params:** `redisId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "redisId": "l38B9KASb_1ILtjso1mzY",
+  "name": "my-redis",
+  "appName": "my-redis-w8npn1",
+  "description": null,
+  "databasePassword": "mypassword",
+  "dockerImage": "redis:8",
+  "command": null,
+  "args": null,
+  "env": null,
+  "externalPort": null,
+  "memoryReservation": null,
+  "memoryLimit": null,
+  "cpuReservation": null,
+  "cpuLimit": null,
+  "replicas": 1,
+  "applicationStatus": "done",
+  "createdAt": "2026-05-23T01:33:00.123Z",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "serverId": null,
+  "healthCheckSwarm": null,
+  "restartPolicySwarm": null,
+  "placementSwarm": null,
+  "updateConfigSwarm": null,
+  "rollbackConfigSwarm": null,
+  "modeSwarm": null,
+  "labelsSwarm": null,
+  "networkSwarm": null,
+  "stopGracePeriodSwarm": null,
+  "endpointSpecSwarm": null,
+  "ulimitsSwarm": null,
+  "environment": { "...": "..." },
+  "mounts": [
+    {
+      "mountId": "7JnmG9wFbuyM9j7AbFs_q",
+      "type": "volume",
+      "volumeName": "my-redis-w8npn1-data",
+      "mountPath": "/data",
+      "serviceType": "redis",
+      "redisId": "l38B9KASb_1ILtjso1mzY"
+    }
+  ],
+  "server": null
+}
+```
+
+**Note:** The redis object does NOT have a `backups` field (unlike postgres/mysql/mariadb/mongo which all include `"backups": []`).
+
+**Password in read:** `databasePassword` IS returned in plaintext by `redis.one`. Treat as sensitive.
+
+---
+
+### `POST /api/redis.create`
+
+**Request body:**
+```json
+{
+  "name": "my-redis",
+  "appName": "my-redis",
+  "environmentId": "3syo_vjPnl-5xjNjCFjV_",
+  "databasePassword": "mypassword"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `appName` | string | yes | Docker service name (auto-suffixed) |
+| `environmentId` | string | yes | Parent environment ID |
+| `databasePassword` | string | yes | Redis AUTH password |
+| `dockerImage` | string | no | Defaults to `redis:8` |
+| `description` | string | no | Optional description |
+
+**Note:** There is no `databaseName` or `databaseUser` for Redis.
+
+**Response:** `200 application/json` — the created redis object.
+
+---
+
+### `POST /api/redis.update`
+
+**Request body:**
+```json
+{
+  "redisId": "l38B9KASb_1ILtjso1mzY",
+  "description": "updated",
+  "externalPort": 6380
+}
+```
+
+**Response:** `200 application/json` — `true`.
+
+---
+
+### `POST /api/redis.deploy`
+
+**Request body:** `{ "redisId": "l38B9KASb_1ILtjso1mzY" }`
+
+**Response:** `200 application/json` — full redis object (same as `redis.one`). Poll until `applicationStatus` is `done` or `error`.
+
+---
+
+### `POST /api/redis.remove`
+
+**Request body:** `{ "redisId": "l38B9KASb_1ILtjso1mzY" }`
+
+**Response:** `200 application/json` — the deleted redis object.
+
+---
+
 ## Deployment Status Reference
 
 ### `applicationStatus` field (on application objects)
@@ -739,6 +1438,15 @@ Values observed on live instance:
 1. After `application.create`: `idle`
 2. Immediately after `application.deploy`: `running`
 3. ~5 seconds after `application.deploy` (nginx:alpine image): `done`
+
+**Database-specific transitions (verified 2026-05-22):**
+- After `postgres.create`, `mysql.create`, `mariadb.create`, `mongo.create`, `redis.create`: `idle`
+- After `<db>.deploy` is called: status may still show `idle` (deploy is enqueued asynchronously); poll with `<db>.one`
+- After deploy completes successfully: `done`
+- After deploy fails (e.g. invalid Docker image): `error` transiently, then transitions to `done` after successful redeploy
+- `running` observed for mysql (heavier image, slower pull) immediately after deploy call
+
+**Poll strategy for databases:** Same as applications — poll `<db>.one` on `applicationStatus`; stop when value is `done` or `error`.
 
 ### Deployment record `status` field (inside `deployments[]` on `application.one`)
 
