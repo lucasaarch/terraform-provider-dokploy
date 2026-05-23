@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -127,25 +126,6 @@ func (r *applicationResource) Configure(_ context.Context, req resource.Configur
 		return
 	}
 	r.client = c
-}
-
-// slugify turns an application name into a Docker-safe base name. Dokploy
-// appends its own random suffix, so this only needs to be a valid prefix.
-func slugify(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == ' ' || r == '_' || r == '-':
-			b.WriteRune('-')
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" {
-		out = "app"
-	}
-	return out
 }
 
 // optionalString returns a pointer to the string value, or nil when the
