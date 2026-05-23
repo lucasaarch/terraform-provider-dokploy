@@ -289,13 +289,15 @@ type Destination struct {
 	OrganizationID   string   `json:"organizationId"`
 }
 
-// DestinationInput is the create/update payload.
+// DestinationInput is the create/update payload. Region is intentionally
+// without omitempty: the Dokploy API's Zod schema rejects requests with a
+// missing region field even when it would be empty.
 type DestinationInput struct {
 	Name             string   `json:"name,omitempty"`
 	Provider         string   `json:"provider,omitempty"`
 	Bucket           string   `json:"bucket,omitempty"`
 	Endpoint         string   `json:"endpoint,omitempty"`
-	Region           string   `json:"region,omitempty"`
+	Region           string   `json:"region"`
 	AccessKey        string   `json:"accessKey,omitempty"`
 	SecretAccessKey  string   `json:"secretAccessKey,omitempty"`
 	AdditionalFlags  []string `json:"additionalFlags,omitempty"`
@@ -328,7 +330,7 @@ func (c *Client) UpdateDestination(ctx context.Context, id string, in Destinatio
 
 func (c *Client) DeleteDestination(ctx context.Context, id string) error {
 	payload := map[string]string{"destinationId": id}
-	return c.do(ctx, http.MethodPost, "destination.delete", payload, nil, nil)
+	return c.do(ctx, http.MethodPost, "destination.remove", payload, nil, nil)
 }
 ```
 
@@ -659,25 +661,34 @@ import (
 	"testing"
 )
 
+// TestCreateBackup verifies the diff-based id discovery: list backups on the
+// parent, call backup.create with an empty 200 response, list again, and
+// return the new backup. The mock server flips a flag on the second list call.
 func TestCreateBackup(t *testing.T) {
+	createCalled := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/backup.create" {
-			t.Errorf("path = %q", r.URL.Path)
+		switch r.URL.Path {
+		case "/api/postgres.one":
+			if r.URL.Query().Get("postgresId") != "pg1" {
+				t.Errorf("postgresId = %q", r.URL.Query().Get("postgresId"))
+			}
+			out := Postgres{ID: "pg1", Name: "db"}
+			if createCalled {
+				out.Backups = []Backup{{ID: "b1", Schedule: "0 3 * * *", DatabaseType: "postgres"}}
+			}
+			_ = json.NewEncoder(w).Encode(out)
+		case "/api/backup.create":
+			var body BackupInput
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.PostgresID == nil || *body.PostgresID != "pg1" {
+				t.Errorf("postgresId not set: body = %+v", body)
+			}
+			createCalled = true
+			w.WriteHeader(http.StatusOK)
+			// Empty body — matches real API.
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
 		}
-		var body BackupInput
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.DatabaseType != "postgres" {
-			t.Errorf("databaseType = %q", body.DatabaseType)
-		}
-		_ = json.NewEncoder(w).Encode(Backup{
-			ID:            "b1",
-			Schedule:      body.Schedule,
-			Prefix:        body.Prefix,
-			DestinationID: body.DestinationID,
-			Database:      body.Database,
-			DatabaseType:  body.DatabaseType,
-			Enabled:       true,
-		})
 	}))
 	defer srv.Close()
 	c := New(srv.URL, "k")
@@ -692,7 +703,7 @@ func TestCreateBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBackup() error = %v", err)
 	}
-	if b.ID != "b1" || b.DatabaseType != "postgres" {
+	if b.ID != "b1" {
 		t.Errorf("b = %+v", b)
 	}
 }
@@ -708,6 +719,26 @@ func TestGetBackup_NotFound(t *testing.T) {
 		t.Errorf("IsNotFound() = false")
 	}
 }
+
+func TestSetTypedID(t *testing.T) {
+	cases := map[string]func(*BackupInput) bool{
+		"postgres":   func(in *BackupInput) bool { return in.PostgresID != nil && *in.PostgresID == "x" },
+		"mysql":      func(in *BackupInput) bool { return in.MysqlID != nil && *in.MysqlID == "x" },
+		"mariadb":    func(in *BackupInput) bool { return in.MariadbID != nil && *in.MariadbID == "x" },
+		"mongo":      func(in *BackupInput) bool { return in.MongoID != nil && *in.MongoID == "x" },
+		"libsql":     func(in *BackupInput) bool { return in.LibsqlID != nil && *in.LibsqlID == "x" },
+		"web-server": func(in *BackupInput) bool { return in.PostgresID == nil && in.MysqlID == nil }, // none set
+	}
+	for typ, check := range cases {
+		in := &BackupInput{Database: "x", DatabaseType: typ}
+		if err := in.SetTypedID(); err != nil {
+			t.Errorf("%s: %v", typ, err)
+		}
+		if !check(in) {
+			t.Errorf("%s: typed id not set correctly: %+v", typ, in)
+		}
+	}
+}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -716,44 +747,158 @@ Run: `go test ./internal/client/ -run Backup -v` — Expected: FAIL.
 
 - [ ] **Step 3: Write `internal/client/backup.go`**
 
+> The Dokploy backup API has three traits this code has to handle:
+> 1. **`backup.create` returns HTTP 200 with an empty body** even when the backup is persisted. The id has to be discovered by listing the parent resource's `backups[]` after the call.
+> 2. **The typed-id field is mandatory** alongside the generic `database` field — `database` alone leads to a silent discard (HTTP 200, no persistence).
+> 3. **`backup.update` is not partial** — every writable field (including the nullable ones like `enabled`, `keepLatestCount`, `serviceName`, `metadata`) must be present in the body. The client uses pointer types so callers can pass `nil` to mean "null in JSON".
+
+The client also needs to fetch the parent resource's `backups[]`, so each database client struct gains a `Backups []Backup` field.
+
 ```go
 package client
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 )
 
 // Backup is a scheduled backup configuration.
 type Backup struct {
-	ID              string `json:"backupId"`
-	Schedule        string `json:"schedule"`
-	Prefix          string `json:"prefix"`
-	DestinationID   string `json:"destinationId"`
-	Database        string `json:"database"`
-	DatabaseType    string `json:"databaseType"`
-	Enabled         bool   `json:"enabled"`
-	KeepLatestCount int    `json:"keepLatestCount"`
+	ID              string          `json:"backupId"`
+	AppName         string          `json:"appName"`
+	Schedule        string          `json:"schedule"`
+	Prefix          string          `json:"prefix"`
+	DestinationID   string          `json:"destinationId"`
+	Database        string          `json:"database"`
+	DatabaseType    string          `json:"databaseType"`
+	BackupType      string          `json:"backupType"`
+	Enabled         *bool           `json:"enabled"`
+	KeepLatestCount *int            `json:"keepLatestCount"`
+	ServiceName     *string         `json:"serviceName"`
+	Metadata        json.RawMessage `json:"metadata"`
+	PostgresID      *string         `json:"postgresId"`
+	MysqlID         *string         `json:"mysqlId"`
+	MariadbID       *string         `json:"mariadbId"`
+	MongoID         *string         `json:"mongoId"`
+	LibsqlID        *string         `json:"libsqlId"`
+	ComposeID       *string         `json:"composeId"`
 }
 
-// BackupInput is the create/update payload.
+// BackupInput is the create/update payload. The typed id (PostgresID, etc.) is
+// required on create alongside Database; the helper SetTypedID derives it.
+// On update, all nullable fields must be present in the JSON — pointer fields
+// with no `omitempty` serialize as JSON null when nil.
 type BackupInput struct {
-	Schedule        string `json:"schedule,omitempty"`
-	Prefix          string `json:"prefix,omitempty"`
-	DestinationID   string `json:"destinationId,omitempty"`
-	Database        string `json:"database,omitempty"`
-	DatabaseType    string `json:"databaseType,omitempty"`
-	Enabled         *bool  `json:"enabled,omitempty"`
-	KeepLatestCount *int   `json:"keepLatestCount,omitempty"`
+	Schedule        string          `json:"schedule"`
+	Prefix          string          `json:"prefix"`
+	DestinationID   string          `json:"destinationId"`
+	Database        string          `json:"database"`
+	DatabaseType    string          `json:"databaseType"`
+	Enabled         *bool           `json:"enabled"`
+	KeepLatestCount *int            `json:"keepLatestCount"`
+	ServiceName     *string         `json:"serviceName"`
+	Metadata        json.RawMessage `json:"metadata"`
+	PostgresID      *string         `json:"postgresId,omitempty"`
+	MysqlID         *string         `json:"mysqlId,omitempty"`
+	MariadbID       *string         `json:"mariadbId,omitempty"`
+	MongoID         *string         `json:"mongoId,omitempty"`
+	LibsqlID        *string         `json:"libsqlId,omitempty"`
 }
 
+// SetTypedID populates the typed id field (PostgresID, MysqlID, …) based on
+// DatabaseType. Returns an error for an unknown type.
+func (in *BackupInput) SetTypedID() error {
+	id := in.Database
+	switch in.DatabaseType {
+	case "postgres":
+		in.PostgresID = &id
+	case "mysql":
+		in.MysqlID = &id
+	case "mariadb":
+		in.MariadbID = &id
+	case "mongo":
+		in.MongoID = &id
+	case "libsql":
+		in.LibsqlID = &id
+	case "web-server":
+		// web-server has no typed id field; the API accepts `database` alone for this type.
+	default:
+		return fmt.Errorf("unknown databaseType %q", in.DatabaseType)
+	}
+	return nil
+}
+
+// CreateBackup creates a backup. The API responds with an empty body, so the
+// new backup id is discovered by diffing the parent resource's backups[] list.
 func (c *Client) CreateBackup(ctx context.Context, in BackupInput) (*Backup, error) {
-	var out Backup
-	if err := c.do(ctx, http.MethodPost, "backup.create", in, nil, &out); err != nil {
+	if err := in.SetTypedID(); err != nil {
 		return nil, err
 	}
-	return &out, nil
+
+	before, err := c.listBackupsForResource(ctx, in.DatabaseType, in.Database)
+	if err != nil {
+		return nil, fmt.Errorf("listing backups before create: %w", err)
+	}
+	seen := make(map[string]struct{}, len(before))
+	for _, b := range before {
+		seen[b.ID] = struct{}{}
+	}
+
+	if err := c.do(ctx, http.MethodPost, "backup.create", in, nil, nil); err != nil {
+		return nil, err
+	}
+
+	after, err := c.listBackupsForResource(ctx, in.DatabaseType, in.Database)
+	if err != nil {
+		return nil, fmt.Errorf("listing backups after create: %w", err)
+	}
+	for i := range after {
+		if _, was := seen[after[i].ID]; !was {
+			return &after[i], nil
+		}
+	}
+	return nil, fmt.Errorf("backup.create returned 200 but no new backup found on the parent %s", in.DatabaseType)
+}
+
+// listBackupsForResource fetches the parent resource and returns its backups[].
+func (c *Client) listBackupsForResource(ctx context.Context, dbType, id string) ([]Backup, error) {
+	switch dbType {
+	case "postgres":
+		pg, err := c.GetPostgres(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return pg.Backups, nil
+	case "mysql":
+		my, err := c.GetMysql(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return my.Backups, nil
+	case "mariadb":
+		ma, err := c.GetMariadb(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return ma.Backups, nil
+	case "mongo":
+		mo, err := c.GetMongo(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return mo.Backups, nil
+	case "web-server":
+		app, err := c.GetApplication(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return app.Backups, nil
+	default:
+		return nil, fmt.Errorf("unknown databaseType %q", dbType)
+	}
 }
 
 func (c *Client) GetBackup(ctx context.Context, id string) (*Backup, error) {
@@ -765,6 +910,8 @@ func (c *Client) GetBackup(ctx context.Context, id string) (*Backup, error) {
 	return &out, nil
 }
 
+// UpdateBackup sends every writable field (the API requires a full payload,
+// not a partial update).
 func (c *Client) UpdateBackup(ctx context.Context, id string, in BackupInput) error {
 	payload := struct {
 		BackupInput
@@ -775,9 +922,19 @@ func (c *Client) UpdateBackup(ctx context.Context, id string, in BackupInput) er
 
 func (c *Client) DeleteBackup(ctx context.Context, id string) error {
 	payload := map[string]string{"backupId": id}
-	return c.do(ctx, http.MethodPost, "backup.delete", payload, nil, nil)
+	return c.do(ctx, http.MethodPost, "backup.remove", payload, nil, nil)
 }
 ```
+
+> **Companion edit (one line per existing DB client struct):** to make the diff-based create work, add a `Backups []Backup \`json:"backups"\`` field to each of `Postgres`, `Mysql`, `Mariadb`, `Mongo`, and `Application` (the latter for the `web-server` type). Do these five edits in this same task — they are mechanical additions to the structs and do not affect existing code paths because zero-value `nil` slice serialises to `null`/`omits` the same way the old struct did.
+>
+> For each of `internal/client/postgres.go`, `mysql.go`, `mariadb.go`, `mongo.go`, `application.go`: add this line inside the struct literal (near the end of the field list):
+>
+> ```go
+> 	Backups []Backup `json:"backups"`
+> ```
+>
+> Run `go vet ./...` and the existing unit-test suite (`go test ./internal/client/... -v`) to confirm no regression. (If the verifier on Task 1 confirmed `application.one` does **not** have a `backups[]` field — i.e. web-server backups live somewhere else — replace the `web-server` branch of `listBackupsForResource` with a clear error: `return nil, fmt.Errorf("listing web-server backups is not yet supported in this provider version")`, and document the limitation in the resource MarkdownDescription.)
 
 - [ ] **Step 4: Run unit tests to verify they pass**
 
@@ -1050,8 +1207,16 @@ func (r *backupResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 	plan.ID = types.StringValue(b.ID)
-	plan.Enabled = types.BoolValue(b.Enabled)
-	plan.KeepLatestCount = types.Int64Value(int64(b.KeepLatestCount))
+	if b.Enabled != nil {
+		plan.Enabled = types.BoolValue(*b.Enabled)
+	} else {
+		plan.Enabled = types.BoolNull()
+	}
+	if b.KeepLatestCount != nil {
+		plan.KeepLatestCount = types.Int64Value(int64(*b.KeepLatestCount))
+	} else {
+		plan.KeepLatestCount = types.Int64Null()
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -1075,8 +1240,16 @@ func (r *backupResource) Read(ctx context.Context, req resource.ReadRequest, res
 	state.DestinationID = types.StringValue(b.DestinationID)
 	state.Schedule = types.StringValue(b.Schedule)
 	state.Prefix = types.StringValue(b.Prefix)
-	state.Enabled = types.BoolValue(b.Enabled)
-	state.KeepLatestCount = types.Int64Value(int64(b.KeepLatestCount))
+	if b.Enabled != nil {
+		state.Enabled = types.BoolValue(*b.Enabled)
+	} else {
+		state.Enabled = types.BoolNull()
+	}
+	if b.KeepLatestCount != nil {
+		state.KeepLatestCount = types.Int64Value(int64(*b.KeepLatestCount))
+	} else {
+		state.KeepLatestCount = types.Int64Null()
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
