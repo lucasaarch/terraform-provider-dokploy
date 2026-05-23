@@ -13,6 +13,10 @@ Manage [Dokploy](https://dokploy.com) infrastructure declaratively with Terrafor
 - `dokploy_mariadb` — managed MariaDB service
 - `dokploy_mongo` — managed MongoDB service
 - `dokploy_redis` — managed Redis service
+- `dokploy_destination` — S3-compatible storage destination (organization-level)
+- `dokploy_backup` — scheduled backup of a database (`postgres`, `mysql`, `mariadb`, `mongo`)
+- `dokploy_application_schedule` — cron command inside an application container
+- `dokploy_host_schedule` — cron command on the Dokploy host
 
 ## Data sources
 
