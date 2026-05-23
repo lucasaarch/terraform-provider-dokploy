@@ -8,6 +8,11 @@ Manage [Dokploy](https://dokploy.com) infrastructure declaratively with Terrafor
 - `dokploy_environment` — custom environments
 - `dokploy_application` — Docker-image applications (deploys on apply)
 - `dokploy_domain` — domains routing traffic to applications
+- `dokploy_postgres` — managed PostgreSQL service
+- `dokploy_mysql` — managed MySQL service
+- `dokploy_mariadb` — managed MariaDB service
+- `dokploy_mongo` — managed MongoDB service
+- `dokploy_redis` — managed Redis service
 
 ## Data sources
 
