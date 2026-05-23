@@ -57,6 +57,63 @@ resource "dokploy_application" "test" {
 	})
 }
 
+func TestAccApplicationResource_Advanced(t *testing.T) {
+	suffix := randInt()
+	configWithSwarm := fmt.Sprintf(`
+resource "dokploy_project" "test" {
+  name = "tf-acc-app-adv-proj-%d"
+}
+
+resource "dokploy_application" "test" {
+  environment_id = dokploy_project.test.production_environment_id
+  name           = "tf-acc-app-adv"
+  docker_image   = "nginx:1.27"
+  replicas       = 1
+  health_check {
+    test         = ["CMD", "curl", "-f", "http://localhost"]
+    interval     = "30s"
+    timeout      = "10s"
+    retries      = 3
+    start_period = "5s"
+  }
+  restart_policy {
+    condition    = "on-failure"
+    delay        = "5s"
+    max_attempts = 3
+    window       = "120s"
+  }
+  timeouts {
+    create = "15m"
+    update = "15m"
+  }
+}`, suffix)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: configWithSwarm,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("dokploy_application.test", "id"),
+					resource.TestCheckResourceAttr("dokploy_application.test", "replicas", "1"),
+					resource.TestCheckResourceAttr("dokploy_application.test", "health_check.interval", "30s"),
+					resource.TestCheckResourceAttr("dokploy_application.test", "health_check.retries", "3"),
+					resource.TestCheckResourceAttr("dokploy_application.test", "restart_policy.condition", "on-failure"),
+					resource.TestCheckResourceAttr("dokploy_application.test", "restart_policy.max_attempts", "3"),
+					resource.TestCheckResourceAttr("dokploy_application.test", "status", "done"),
+				),
+			},
+			{
+				ResourceName:            "dokploy_application.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"registry_password", "timeouts"},
+			},
+		},
+	})
+}
+
 func TestAccApplicationResource_OnServer(t *testing.T) {
 	if os.Getenv("DOKPLOY_TEST_SERVER_IP") == "" {
 		t.Skip("set DOKPLOY_TEST_SERVER_IP (and friends) to run.")

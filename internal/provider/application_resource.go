@@ -7,12 +7,15 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 
 	"github.com/lucasaarch/terraform-provider-dokploy/internal/client"
 )
@@ -49,7 +52,132 @@ type applicationModel struct {
 	AppName          types.String   `tfsdk:"app_name"`
 	Status           types.String   `tfsdk:"status"`
 	ServerID         types.String   `tfsdk:"server_id"`
+	Replicas         types.Int64    `tfsdk:"replicas"`
+	HealthCheck      types.Object   `tfsdk:"health_check"`
+	RestartPolicy    types.Object   `tfsdk:"restart_policy"`
 	Timeouts         timeouts.Value `tfsdk:"timeouts"`
+}
+
+// healthCheckAttrTypes are the attribute types for the health_check block object.
+var healthCheckAttrTypes = map[string]attr.Type{
+	"test":         types.ListType{ElemType: types.StringType},
+	"interval":     types.StringType,
+	"timeout":      types.StringType,
+	"retries":      types.Int64Type,
+	"start_period": types.StringType,
+}
+
+// restartPolicyAttrTypes are the attribute types for the restart_policy block object.
+var restartPolicyAttrTypes = map[string]attr.Type{
+	"condition":    types.StringType,
+	"delay":        types.StringType,
+	"max_attempts": types.Int64Type,
+	"window":       types.StringType,
+}
+
+// healthCheckFromModel converts a types.Object (health_check block) to *client.HealthCheckSwarm.
+func healthCheckFromModel(ctx context.Context, m types.Object) (*client.HealthCheckSwarm, diag.Diagnostics) {
+	if m.IsNull() || m.IsUnknown() {
+		return nil, nil
+	}
+	var inner struct {
+		Test        types.List   `tfsdk:"test"`
+		Interval    types.String `tfsdk:"interval"`
+		Timeout     types.String `tfsdk:"timeout"`
+		Retries     types.Int64  `tfsdk:"retries"`
+		StartPeriod types.String `tfsdk:"start_period"`
+	}
+	diags := m.As(ctx, &inner, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return nil, diags
+	}
+	var test []string
+	if !inner.Test.IsNull() && !inner.Test.IsUnknown() {
+		diags.Append(inner.Test.ElementsAs(ctx, &test, false)...)
+	}
+	hc := &client.HealthCheckSwarm{
+		Test:    test,
+		Retries: int(inner.Retries.ValueInt64()),
+	}
+	if s := inner.Interval.ValueString(); s != "" {
+		if d, err := time.ParseDuration(s); err == nil {
+			hc.Interval = d.Nanoseconds()
+		}
+	}
+	if s := inner.Timeout.ValueString(); s != "" {
+		if d, err := time.ParseDuration(s); err == nil {
+			hc.Timeout = d.Nanoseconds()
+		}
+	}
+	if s := inner.StartPeriod.ValueString(); s != "" {
+		if d, err := time.ParseDuration(s); err == nil {
+			hc.StartPeriod = d.Nanoseconds()
+		}
+	}
+	return hc, diags
+}
+
+// restartPolicyFromModel converts a types.Object (restart_policy block) to *client.RestartPolicySwarm.
+func restartPolicyFromModel(ctx context.Context, m types.Object) (*client.RestartPolicySwarm, diag.Diagnostics) {
+	if m.IsNull() || m.IsUnknown() {
+		return nil, nil
+	}
+	var inner struct {
+		Condition   types.String `tfsdk:"condition"`
+		Delay       types.String `tfsdk:"delay"`
+		MaxAttempts types.Int64  `tfsdk:"max_attempts"`
+		Window      types.String `tfsdk:"window"`
+	}
+	diags := m.As(ctx, &inner, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return nil, diags
+	}
+	rp := &client.RestartPolicySwarm{
+		Condition:   inner.Condition.ValueString(),
+		MaxAttempts: int(inner.MaxAttempts.ValueInt64()),
+	}
+	if s := inner.Delay.ValueString(); s != "" {
+		if d, err := time.ParseDuration(s); err == nil {
+			rp.Delay = d.Nanoseconds()
+		}
+	}
+	if s := inner.Window.ValueString(); s != "" {
+		if d, err := time.ParseDuration(s); err == nil {
+			rp.Window = d.Nanoseconds()
+		}
+	}
+	return rp, diags
+}
+
+// healthCheckToObject converts *client.HealthCheckSwarm to a types.Object for state storage.
+func healthCheckToObject(ctx context.Context, hc *client.HealthCheckSwarm) (types.Object, diag.Diagnostics) {
+	if hc == nil {
+		return types.ObjectNull(healthCheckAttrTypes), nil
+	}
+	testList, diags := types.ListValueFrom(ctx, types.StringType, hc.Test)
+	if diags.HasError() {
+		return types.ObjectNull(healthCheckAttrTypes), diags
+	}
+	return types.ObjectValue(healthCheckAttrTypes, map[string]attr.Value{
+		"test":         testList,
+		"interval":     types.StringValue(time.Duration(hc.Interval).String()),
+		"timeout":      types.StringValue(time.Duration(hc.Timeout).String()),
+		"retries":      types.Int64Value(int64(hc.Retries)),
+		"start_period": types.StringValue(time.Duration(hc.StartPeriod).String()),
+	})
+}
+
+// restartPolicyToObject converts *client.RestartPolicySwarm to a types.Object for state storage.
+func restartPolicyToObject(rp *client.RestartPolicySwarm) (types.Object, diag.Diagnostics) {
+	if rp == nil {
+		return types.ObjectNull(restartPolicyAttrTypes), nil
+	}
+	return types.ObjectValue(restartPolicyAttrTypes, map[string]attr.Value{
+		"condition":    types.StringValue(rp.Condition),
+		"delay":        types.StringValue(time.Duration(rp.Delay).String()),
+		"max_attempts": types.Int64Value(int64(rp.MaxAttempts)),
+		"window":       types.StringValue(time.Duration(rp.Window).String()),
+	})
 }
 
 func (r *applicationResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -118,9 +246,34 @@ func (r *applicationResource) Schema(ctx context.Context, _ resource.SchemaReque
 				Computed:            true,
 				MarkdownDescription: "Status of the most recent deployment.",
 			},
+			"replicas": schema.Int64Attribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Number of Docker Swarm replicas. Defaults to whatever Dokploy uses (typically 1).",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.UseStateForUnknown()},
+			},
 		},
 		Blocks: map[string]schema.Block{
 			"timeouts": timeouts.Block(ctx, timeouts.Opts{Create: true, Update: true}),
+			"health_check": schema.SingleNestedBlock{
+				MarkdownDescription: "Docker Swarm healthcheck. Omit to skip.",
+				Attributes: map[string]schema.Attribute{
+					"test":         schema.ListAttribute{Optional: true, ElementType: types.StringType, MarkdownDescription: "Command (e.g. `[\"CMD\", \"curl\", \"-f\", \"http://localhost/health\"]`)."},
+					"interval":     schema.StringAttribute{Optional: true, MarkdownDescription: "Probe interval (e.g. `30s`)."},
+					"timeout":      schema.StringAttribute{Optional: true, MarkdownDescription: "Probe timeout."},
+					"retries":      schema.Int64Attribute{Optional: true, MarkdownDescription: "Number of retries before unhealthy."},
+					"start_period": schema.StringAttribute{Optional: true, MarkdownDescription: "Initial grace period."},
+				},
+			},
+			"restart_policy": schema.SingleNestedBlock{
+				MarkdownDescription: "Docker Swarm restart policy. Omit to skip.",
+				Attributes: map[string]schema.Attribute{
+					"condition":    schema.StringAttribute{Optional: true, MarkdownDescription: "`none`, `on-failure`, or `any`."},
+					"delay":        schema.StringAttribute{Optional: true, MarkdownDescription: "Delay between attempts (e.g. `5s`)."},
+					"max_attempts": schema.Int64Attribute{Optional: true, MarkdownDescription: "Maximum restart attempts."},
+					"window":       schema.StringAttribute{Optional: true, MarkdownDescription: "Evaluation window for max attempts."},
+				},
+			},
 		},
 	}
 }
@@ -149,7 +302,7 @@ func optionalString(v types.String) *string {
 	return &s
 }
 
-// configureAndDeploy applies docker provider config + env, triggers a deploy,
+// configureAndDeploy applies docker provider config + env + swarm settings, triggers a deploy,
 // and waits for it to finish. Used by both Create and Update.
 func (r *applicationResource) configureAndDeploy(ctx context.Context, m *applicationModel, timeout time.Duration) error {
 	id := m.ID.ValueString()
@@ -212,6 +365,47 @@ func (r *applicationResource) Create(ctx context.Context, req resource.CreateReq
 	} else if plan.ServerID.IsUnknown() {
 		plan.ServerID = types.StringNull()
 	}
+	// Initialize replicas from response if not set in plan
+	if plan.Replicas.IsUnknown() || plan.Replicas.IsNull() {
+		if app.Replicas != nil {
+			plan.Replicas = types.Int64Value(int64(*app.Replicas))
+		} else {
+			plan.Replicas = types.Int64Null()
+		}
+	}
+	// Initialize health_check and restart_policy null objects if not set
+	if plan.HealthCheck.IsUnknown() || plan.HealthCheck.IsNull() {
+		plan.HealthCheck = types.ObjectNull(healthCheckAttrTypes)
+	}
+	if plan.RestartPolicy.IsUnknown() || plan.RestartPolicy.IsNull() {
+		plan.RestartPolicy = types.ObjectNull(restartPolicyAttrTypes)
+	}
+
+	// Apply name/description + swarm advanced fields on the freshly-created application.
+	createInput := client.ApplicationInput{
+		Name:        plan.Name.ValueString(),
+		Description: plan.Description.ValueString(),
+	}
+	if !plan.Replicas.IsNull() && !plan.Replicas.IsUnknown() {
+		v := int(plan.Replicas.ValueInt64())
+		createInput.Replicas = &v
+	}
+	hcCreate, hcCreateDiags := healthCheckFromModel(ctx, plan.HealthCheck)
+	resp.Diagnostics.Append(hcCreateDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	createInput.HealthCheckSwarm = hcCreate
+	rpCreate, rpCreateDiags := restartPolicyFromModel(ctx, plan.RestartPolicy)
+	resp.Diagnostics.Append(rpCreateDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	createInput.RestartPolicySwarm = rpCreate
+	if err := r.client.UpdateApplication(ctx, plan.ID.ValueString(), createInput); err != nil {
+		resp.Diagnostics.AddError("Error configuring application", err.Error())
+		return
+	}
 
 	if err := r.configureAndDeploy(ctx, &plan, createTimeout); err != nil {
 		// The application exists; persist its id so a later apply can retry.
@@ -272,6 +466,29 @@ func (r *applicationResource) Read(ctx context.Context, req resource.ReadRequest
 	} else if !state.Env.IsNull() {
 		state.Env = types.MapValueMust(types.StringType, map[string]attr.Value{})
 	}
+	// Replicas
+	if app.Replicas != nil {
+		state.Replicas = types.Int64Value(int64(*app.Replicas))
+	} else {
+		state.Replicas = types.Int64Null()
+	}
+	// HealthCheck
+	hcObj, hcDiags := healthCheckToObject(ctx, app.HealthCheckSwarm)
+	resp.Diagnostics.Append(hcDiags...)
+	if !hcDiags.HasError() {
+		// Only overwrite if API returned a value or state already had one
+		if app.HealthCheckSwarm != nil || !state.HealthCheck.IsNull() {
+			state.HealthCheck = hcObj
+		}
+	}
+	// RestartPolicy
+	rpObj, rpDiags := restartPolicyToObject(app.RestartPolicySwarm)
+	resp.Diagnostics.Append(rpDiags...)
+	if !rpDiags.HasError() {
+		if app.RestartPolicySwarm != nil || !state.RestartPolicy.IsNull() {
+			state.RestartPolicy = rpObj
+		}
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
@@ -288,10 +505,29 @@ func (r *applicationResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	if err := r.client.UpdateApplication(ctx, plan.ID.ValueString(), client.ApplicationInput{
+	// Build the update input including name/description + swarm advanced fields.
+	updateInput := client.ApplicationInput{
 		Name:        plan.Name.ValueString(),
 		Description: plan.Description.ValueString(),
-	}); err != nil {
+	}
+	if !plan.Replicas.IsNull() && !plan.Replicas.IsUnknown() {
+		v := int(plan.Replicas.ValueInt64())
+		updateInput.Replicas = &v
+	}
+	hcUpdate, hcUpdateDiags := healthCheckFromModel(ctx, plan.HealthCheck)
+	resp.Diagnostics.Append(hcUpdateDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	updateInput.HealthCheckSwarm = hcUpdate
+	rpUpdate, rpUpdateDiags := restartPolicyFromModel(ctx, plan.RestartPolicy)
+	resp.Diagnostics.Append(rpUpdateDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	updateInput.RestartPolicySwarm = rpUpdate
+
+	if err := r.client.UpdateApplication(ctx, plan.ID.ValueString(), updateInput); err != nil {
 		resp.Diagnostics.AddError("Error updating application", err.Error())
 		return
 	}

@@ -10,29 +10,56 @@ import (
 
 // Application is a Docker-image-sourced application in Dokploy.
 type Application struct {
-	ID                string   `json:"applicationId"`
-	Name              string   `json:"name"`
-	Description       string   `json:"description"`
-	AppName           string   `json:"appName"`
-	EnvironmentID     string   `json:"environmentId"`
-	DockerImage       string   `json:"dockerImage"`
-	RegistryURL       string   `json:"registryUrl"`
-	Username          string   `json:"username"`
-	ApplicationStatus string   `json:"applicationStatus"`
-	Env               string   `json:"env"`
-	Backups           []Backup `json:"backups"`
-	ServerID          *string  `json:"serverId"`
+	ID                 string              `json:"applicationId"`
+	Name               string              `json:"name"`
+	Description        string              `json:"description"`
+	AppName            string              `json:"appName"`
+	EnvironmentID      string              `json:"environmentId"`
+	DockerImage        string              `json:"dockerImage"`
+	RegistryURL        string              `json:"registryUrl"`
+	Username           string              `json:"username"`
+	ApplicationStatus  string              `json:"applicationStatus"`
+	Env                string              `json:"env"`
+	Backups            []Backup            `json:"backups"`
+	ServerID           *string             `json:"serverId"`
+	Replicas           *int                `json:"replicas"`
+	HealthCheckSwarm   *HealthCheckSwarm   `json:"healthCheckSwarm"`
+	RestartPolicySwarm *RestartPolicySwarm `json:"restartPolicySwarm"`
 }
 
 // ApplicationInput is the application.create payload. appName is required by
 // the API; Dokploy appends a random suffix to it. For application.update only
 // Name/Description are sent (AppName/EnvironmentID omitted via omitempty).
 type ApplicationInput struct {
-	Name          string  `json:"name"`
-	AppName       string  `json:"appName,omitempty"`
-	Description   string  `json:"description,omitempty"`
-	EnvironmentID string  `json:"environmentId,omitempty"`
-	ServerID      *string `json:"serverId,omitempty"`
+	Name               string              `json:"name"`
+	AppName            string              `json:"appName,omitempty"`
+	Description        string              `json:"description,omitempty"`
+	EnvironmentID      string              `json:"environmentId,omitempty"`
+	ServerID           *string             `json:"serverId,omitempty"`
+	Replicas           *int                `json:"replicas,omitempty"`
+	HealthCheckSwarm   *HealthCheckSwarm   `json:"healthCheckSwarm,omitempty"`
+	RestartPolicySwarm *RestartPolicySwarm `json:"restartPolicySwarm,omitempty"`
+}
+
+// HealthCheckSwarm mirrors Docker Swarm's HealthCheck object.
+// Durations are nanosecond integers (verified in Task 1 against the live API).
+// The provider converts user-facing Go-style strings ("30s") to nanoseconds
+// before populating these fields.
+type HealthCheckSwarm struct {
+	Test        []string `json:"Test,omitempty"`
+	Interval    int64    `json:"Interval,omitempty"` // nanoseconds
+	Timeout     int64    `json:"Timeout,omitempty"`  // nanoseconds
+	Retries     int      `json:"Retries,omitempty"`
+	StartPeriod int64    `json:"StartPeriod,omitempty"` // nanoseconds
+}
+
+// RestartPolicySwarm mirrors Docker Swarm's RestartPolicy object.
+// Durations are nanosecond integers (same conversion rule as HealthCheckSwarm).
+type RestartPolicySwarm struct {
+	Condition   string `json:"Condition,omitempty"`
+	Delay       int64  `json:"Delay,omitempty"` // nanoseconds
+	MaxAttempts int    `json:"MaxAttempts,omitempty"`
+	Window      int64  `json:"Window,omitempty"` // nanoseconds
 }
 
 // DockerProviderInput configures the Docker image source. The API's Zod schema
