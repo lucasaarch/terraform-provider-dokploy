@@ -104,6 +104,7 @@ func (p *dokployProvider) Resources(_ context.Context) []func() resource.Resourc
 		NewMariadbResource,
 		NewMongoResource,
 		NewRedisResource,
+		NewDestinationResource,
 	}
 }
 
