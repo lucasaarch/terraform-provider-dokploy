@@ -1532,3 +1532,467 @@ The `sourceType` field on an application controls which git/registry source is a
 | `drop` | File drop/upload |
 
 For the Terraform provider v1, only `docker` is supported (simplest case, no OAuth setup required).
+
+---
+
+## destination.*
+
+> Verified against live instance on 2026-05-23.
+
+S3-compatible storage destinations live at the **organization** level (not project or environment). Each destination is identified by `destinationId`.
+
+### `GET /api/destination.all`
+
+Returns all destinations in the organization that owns the API key.
+
+**Request:** no body, no query params.
+
+**Response:** `200 application/json` — array of destination objects.
+
+```json
+[
+  {
+    "destinationId": "FwQFgPCZe4wKraiAd_dyd",
+    "name": "blitz-backups",
+    "provider": "DigitalOcean",
+    "accessKey": "AKIAEXAMPLEKEY1234",
+    "secretAccessKey": "ExampleSecretKey",
+    "bucket": "my-backups",
+    "region": "nyc3",
+    "endpoint": "https://nyc3.digitaloceanspaces.com",
+    "additionalFlags": [],
+    "organizationId": "BTFAI_7TzbiGeXtbPMTT-",
+    "createdAt": "2026-04-08T04:29:05.237Z"
+  }
+]
+```
+
+---
+
+### `GET /api/destination.one?destinationId=<id>`
+
+Returns a single destination.
+
+**Query params:** `destinationId` (string, required).
+
+**Response:** `200 application/json` — single destination object (same shape as array item above).
+
+**Error:** Returns `401 UNAUTHORIZED` if the API key does not have access to the destination's organization.
+
+---
+
+### `POST /api/destination.create`
+
+Creates a new destination.
+
+**Request body:**
+
+```json
+{
+  "name": "prod-backups",
+  "provider": "DigitalOcean",
+  "bucket": "my-bucket",
+  "region": "nyc3",
+  "endpoint": "https://nyc3.digitaloceanspaces.com",
+  "accessKey": "AKIAEXAMPLEKEY1234",
+  "secretAccessKey": "ExampleSecretKey"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `provider` | string | yes | S3 provider name — **free string, no server-side enum validation**. Observed values: `"DigitalOcean"`, `"AWS"`, etc. |
+| `bucket` | string | yes | S3 bucket name |
+| `region` | string | yes | S3 region (pass `""` for providers that don't use it) |
+| `endpoint` | string | yes | S3 endpoint URL |
+| `accessKey` | string | yes | S3 access key ID |
+| `secretAccessKey` | string | yes | S3 secret access key |
+| `additionalFlags` | []string | no | Extra flags forwarded to the backup tool |
+
+**Response:** `200 application/json` — the created destination object.
+
+**Note on `provider`:** The server accepts any string value for `provider` — Zod validates it only as `nonoptional`. The Terraform provider should use `provider_type` as the schema attribute name (to avoid conflicting with Terraform's `provider` meta-argument) and document the observed values.
+
+---
+
+### `POST /api/destination.update`
+
+Updates a destination. **All create fields are required** (not a partial update).
+
+**Request body:**
+
+```json
+{
+  "destinationId": "FwQFgPCZe4wKraiAd_dyd",
+  "name": "prod-backups-renamed",
+  "provider": "DigitalOcean",
+  "bucket": "my-bucket",
+  "region": "nyc3",
+  "endpoint": "https://nyc3.digitaloceanspaces.com",
+  "accessKey": "AKIAEXAMPLEKEY1234",
+  "secretAccessKey": "ExampleSecretKey"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `destinationId` | string | yes | ID of destination to update |
+| `name` | string | yes | Display name |
+| `provider` | string | yes | Provider string (free-form, see `destination.create`) |
+| `bucket` | string | yes | Bucket name |
+| `region` | string | yes | Region |
+| `endpoint` | string | yes | Endpoint URL |
+| `accessKey` | string | yes | Access key |
+| `secretAccessKey` | string | yes | Secret key |
+| `additionalFlags` | []string | no | Extra flags |
+
+**Response:** `200 application/json` — the updated destination object.
+
+---
+
+### `POST /api/destination.remove`
+
+Deletes a destination. **Endpoint is `.remove`, not `.delete`** (`.delete` returns 404).
+
+**Request body:**
+
+```json
+{
+  "destinationId": "FwQFgPCZe4wKraiAd_dyd"
+}
+```
+
+**Response:** `200 application/json` — the deleted destination object.
+
+---
+
+## backup.*
+
+> Verified against live instance on 2026-05-23.
+
+Backups attach to a database or application resource via both a generic `database` field (containing the resource ID) and a typed ID field (`postgresId`, `mysqlId`, etc.).
+
+**Critical behavior: `backup.create` requires the typed ID field to persist.** Sending only `database` + `databaseType` returns HTTP 200 with an empty body and the backup is silently discarded. You must also send `postgresId`, `mysqlId`, `mariadbId`, `mongoId`, or `libsqlId` alongside `database` for the backup to actually be created.
+
+**`backup.all` does NOT exist** (returns 404). Backups are listed via the parent resource's `.one` endpoint (e.g. `postgres.one` returns `backups[]` on the postgres object).
+
+---
+
+### `GET /api/backup.one?backupId=<id>`
+
+Returns a single backup with full details including related destination and database objects.
+
+**Query params:** `backupId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "backupId": "vFoXPdHeTdR3S-tll0mhM",
+  "appName": "backup-back-up-cross-platform-driver-3tckyf",
+  "schedule": "0 3 * * *",
+  "enabled": null,
+  "database": "1W24xWRZsPqg-iGWOPTdA",
+  "prefix": "tf-probe/",
+  "serviceName": null,
+  "destinationId": "Fg1H5b0lhIwvaj4je8tlb",
+  "keepLatestCount": null,
+  "backupType": "database",
+  "databaseType": "postgres",
+  "composeId": null,
+  "postgresId": "1W24xWRZsPqg-iGWOPTdA",
+  "mariadbId": null,
+  "mysqlId": null,
+  "mongoId": null,
+  "libsqlId": null,
+  "userId": null,
+  "metadata": null,
+  "postgres": { "...": "full postgres object" },
+  "mysql": null,
+  "mariadb": null,
+  "mongo": null,
+  "libsql": null,
+  "destination": { "...": "full destination object" },
+  "compose": null
+}
+```
+
+**Complete field list on backup object:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `backupId` | string | Primary key |
+| `appName` | string | Auto-generated internal name |
+| `schedule` | string | Cron expression |
+| `enabled` | boolean\|null | Whether the backup is active; null = not explicitly set (defaults to enabled behavior) |
+| `database` | string | ID of the resource being backed up (same as the typed ID field below) |
+| `prefix` | string | Path prefix inside the bucket |
+| `serviceName` | string\|null | Internal service name (null for database backups) |
+| `destinationId` | string | Destination ID |
+| `keepLatestCount` | integer\|null | Retention count (null = keep all) |
+| `backupType` | string | `"database"` or `"compose"` |
+| `databaseType` | string | See enum below |
+| `composeId` | string\|null | Set when `backupType` is `"compose"` |
+| `postgresId` | string\|null | Set when `databaseType` is `"postgres"` |
+| `mariadbId` | string\|null | Set when `databaseType` is `"mariadb"` |
+| `mysqlId` | string\|null | Set when `databaseType` is `"mysql"` |
+| `mongoId` | string\|null | Set when `databaseType` is `"mongo"` |
+| `libsqlId` | string\|null | Set when `databaseType` is `"libsql"` |
+| `userId` | string\|null | Owner user ID |
+| `metadata` | any\|null | Opaque metadata blob |
+| `postgres` | object\|null | Embedded postgres object |
+| `mysql` | object\|null | Embedded mysql object |
+| `mariadb` | object\|null | Embedded mariadb object |
+| `mongo` | object\|null | Embedded mongo object |
+| `libsql` | object\|null | Embedded libsql object |
+| `destination` | object\|null | Embedded destination object |
+| `compose` | object\|null | Embedded compose object |
+| `deployments` | array | Backup run history |
+
+---
+
+### `POST /api/backup.create`
+
+Creates a scheduled backup.
+
+**Request body:**
+
+```json
+{
+  "schedule": "0 3 * * *",
+  "prefix": "postgres/app/",
+  "destinationId": "FwQFgPCZe4wKraiAd_dyd",
+  "database": "1W24xWRZsPqg-iGWOPTdA",
+  "databaseType": "postgres",
+  "postgresId": "1W24xWRZsPqg-iGWOPTdA"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `schedule` | string | yes | Cron expression |
+| `prefix` | string | yes | Bucket path prefix |
+| `destinationId` | string | yes | Destination ID |
+| `database` | string | yes | Resource ID being backed up |
+| `databaseType` | string | yes | Enum: `"postgres"` \| `"mariadb"` \| `"mysql"` \| `"mongo"` \| `"web-server"` \| `"libsql"` |
+| `postgresId` | string | **required when databaseType is `postgres`** | Must match `database`; backup silently discarded without it |
+| `mysqlId` | string | **required when databaseType is `mysql`** | Must match `database` |
+| `mariadbId` | string | **required when databaseType is `mariadb`** | Must match `database` |
+| `mongoId` | string | **required when databaseType is `mongo`** | Must match `database` |
+| `libsqlId` | string | **required when databaseType is `libsql`** | Must match `database` |
+| `enabled` | boolean\|null | no | Whether enabled; null = server default (active) |
+| `keepLatestCount` | integer\|null | no | Retention count |
+| `serviceName` | string\|null | no | Internal override |
+| `metadata` | any\|null | no | Opaque metadata |
+
+**Response:** `200 application/json` — **empty body**. The backup ID must be obtained from the parent resource's `.one` endpoint after creation (look at `backups[]`).
+
+**Warning:** If the typed ID field (`postgresId` etc.) is omitted, the API returns HTTP 200 with empty body and the backup is NOT persisted. Always include both `database` and the typed ID field.
+
+---
+
+### `POST /api/backup.update`
+
+Updates a backup. **All fields are required** (not a partial update).
+
+**Request body:**
+
+```json
+{
+  "backupId": "vFoXPdHeTdR3S-tll0mhM",
+  "schedule": "0 4 * * *",
+  "prefix": "postgres/app/",
+  "destinationId": "FwQFgPCZe4wKraiAd_dyd",
+  "database": "1W24xWRZsPqg-iGWOPTdA",
+  "databaseType": "postgres",
+  "enabled": true,
+  "keepLatestCount": null,
+  "serviceName": null,
+  "metadata": null
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `backupId` | string | yes | Backup ID |
+| `schedule` | string | yes (via `prefix`/`destinationId`/etc.) | — |
+| `prefix` | string | yes | — |
+| `destinationId` | string | yes | — |
+| `database` | string | yes | — |
+| `databaseType` | string | yes | Enum: `"postgres"` \| `"mariadb"` \| `"mysql"` \| `"mongo"` \| `"web-server"` \| `"libsql"` |
+| `enabled` | boolean\|null | yes (nonoptional) | Pass `true`/`false`/`null` |
+| `keepLatestCount` | integer\|null | yes (nonoptional) | Pass `null` to keep all |
+| `serviceName` | string\|null | yes (nonoptional) | Pass `null` if unused |
+| `metadata` | any\|null | yes (nonoptional) | Pass `null` if unused |
+
+**Response:** `200 application/json` — **empty body**.
+
+---
+
+### `POST /api/backup.remove`
+
+Deletes a backup. **Endpoint is `.remove`, not `.delete`** (`.delete` returns 404).
+
+**Request body:**
+
+```json
+{
+  "backupId": "vFoXPdHeTdR3S-tll0mhM"
+}
+```
+
+**Response:** `200 application/json` — the deleted backup object (without relation sub-objects).
+
+---
+
+## schedule.*
+
+> Verified against live instance on 2026-05-23.
+
+Schedules are cron commands that run on a target (application container, compose service, remote server, or the Dokploy host itself). Each schedule gets an auto-generated `appName`.
+
+---
+
+### `GET /api/schedule.one?scheduleId=<id>`
+
+Returns a single schedule with its related application/compose/server objects.
+
+**Query params:** `scheduleId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "scheduleId": "gFox20q7bMnZyJGfU-vvM",
+  "name": "warmup-cache",
+  "cronExpression": "*/15 * * * *",
+  "appName": "schedule-parse-solid-state-program-61hjaf",
+  "serviceName": null,
+  "shellType": "bash",
+  "scheduleType": "application",
+  "command": "curl -s http://localhost:3000/internal/warmup",
+  "script": null,
+  "applicationId": null,
+  "composeId": null,
+  "serverId": null,
+  "userId": null,
+  "enabled": true,
+  "timezone": null,
+  "createdAt": "2026-05-23T02:34:46.364Z",
+  "application": null,
+  "compose": null,
+  "server": null
+}
+```
+
+**Complete field list on schedule object:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `scheduleId` | string | Primary key |
+| `name` | string | Display name |
+| `cronExpression` | string | Cron schedule |
+| `appName` | string | Auto-generated internal name (computed on create) |
+| `serviceName` | string\|null | Internal service name override |
+| `shellType` | string | Shell: `"bash"` (default), `"sh"`, etc. |
+| `scheduleType` | string | See enum below |
+| `command` | string | Shell command to execute |
+| `script` | string\|null | Script body (alternative to `command`) |
+| `applicationId` | string\|null | Set when `scheduleType` is `"application"` |
+| `composeId` | string\|null | Set when `scheduleType` is `"compose"` |
+| `serverId` | string\|null | Set when `scheduleType` is `"server"` |
+| `userId` | string\|null | Owner user ID |
+| `enabled` | boolean | Whether the schedule is active (defaults to `true` on create) |
+| `timezone` | string\|null | IANA timezone string; null = UTC |
+| `createdAt` | string | ISO 8601 timestamp |
+| `application` | object\|null | Embedded application object |
+| `compose` | object\|null | Embedded compose object |
+| `server` | object\|null | Embedded server object |
+
+**`scheduleType` enum:**
+
+| Value | Target |
+|-------|--------|
+| `application` | Run command inside an application container |
+| `compose` | Run command inside a compose service |
+| `server` | Run command on a remote server |
+| `dokploy-server` | Run command on the Dokploy host itself |
+
+---
+
+### `POST /api/schedule.create`
+
+Creates a scheduled cron command.
+
+**Request body:**
+
+```json
+{
+  "name": "warmup-cache",
+  "cronExpression": "*/15 * * * *",
+  "command": "curl -s http://localhost:3000/internal/warmup",
+  "scheduleType": "application",
+  "applicationId": "Y2gQJgGGT5wBmaEZ35blK"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `cronExpression` | string | yes | Cron expression |
+| `command` | string | yes | Shell command to run |
+| `scheduleType` | string | no | Enum: `"application"` \| `"compose"` \| `"server"` \| `"dokploy-server"`. Defaults to `"application"` if omitted |
+| `shellType` | string | no | Shell type; defaults to `"bash"` |
+| `applicationId` | string | required if `scheduleType` = `"application"` | Application ID |
+| `composeId` | string | required if `scheduleType` = `"compose"` | Compose stack ID |
+| `serverId` | string | required if `scheduleType` = `"server"` | Server ID |
+| `enabled` | boolean | no | Defaults to `true` |
+| `timezone` | string | no | IANA timezone (e.g. `"America/Sao_Paulo"`); null = UTC |
+
+**Response:** `200 application/json` — the created schedule object (same shape as `schedule.one` minus relation sub-objects).
+
+---
+
+### `POST /api/schedule.update`
+
+Updates a schedule. **`name` and `cronExpression` are required**; other fields are optional.
+
+**Request body:**
+
+```json
+{
+  "scheduleId": "gFox20q7bMnZyJGfU-vvM",
+  "name": "warmup-cache",
+  "cronExpression": "*/15 * * * *",
+  "command": "echo updated"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `scheduleId` | string | yes | Schedule ID |
+| `name` | string | yes | Display name |
+| `cronExpression` | string | yes | Cron expression |
+| `command` | string | no | New command |
+| `shellType` | string | no | New shell type |
+| `enabled` | boolean | no | Toggle active state |
+| `timezone` | string | no | New timezone |
+
+**Response:** `200 application/json` — the updated schedule object.
+
+---
+
+### `POST /api/schedule.delete`
+
+Deletes a schedule. **Endpoint is `.delete`** (confirmed working; unlike backup/destination which use `.remove`).
+
+**Request body:**
+
+```json
+{
+  "scheduleId": "gFox20q7bMnZyJGfU-vvM"
+}
+```
+
+**Response:** `200 application/json` — `true` (boolean literal).
