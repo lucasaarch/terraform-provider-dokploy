@@ -7,17 +7,18 @@ import (
 )
 
 type Mongo struct {
-	ID                string `json:"mongoId"`
-	Name              string `json:"name"`
-	AppName           string `json:"appName"`
-	Description       string `json:"description"`
-	EnvironmentID     string `json:"environmentId"`
-	DockerImage       string `json:"dockerImage"`
-	DatabaseUser      string `json:"databaseUser"`
-	DatabasePassword  string `json:"databasePassword"`
-	ExternalPort      int    `json:"externalPort"`
-	Env               string `json:"env"`
-	ApplicationStatus string `json:"applicationStatus"`
+	ID                string   `json:"mongoId"`
+	Name              string   `json:"name"`
+	AppName           string   `json:"appName"`
+	Description       string   `json:"description"`
+	EnvironmentID     string   `json:"environmentId"`
+	DockerImage       string   `json:"dockerImage"`
+	DatabaseUser      string   `json:"databaseUser"`
+	DatabasePassword  string   `json:"databasePassword"`
+	ExternalPort      int      `json:"externalPort"`
+	Env               string   `json:"env"`
+	ApplicationStatus string   `json:"applicationStatus"`
+	Backups           []Backup `json:"backups"`
 }
 
 type MongoInput struct {

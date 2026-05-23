@@ -10,16 +10,17 @@ import (
 
 // Application is a Docker-image-sourced application in Dokploy.
 type Application struct {
-	ID                string `json:"applicationId"`
-	Name              string `json:"name"`
-	Description       string `json:"description"`
-	AppName           string `json:"appName"`
-	EnvironmentID     string `json:"environmentId"`
-	DockerImage       string `json:"dockerImage"`
-	RegistryURL       string `json:"registryUrl"`
-	Username          string `json:"username"`
-	ApplicationStatus string `json:"applicationStatus"`
-	Env               string `json:"env"`
+	ID                string   `json:"applicationId"`
+	Name              string   `json:"name"`
+	Description       string   `json:"description"`
+	AppName           string   `json:"appName"`
+	EnvironmentID     string   `json:"environmentId"`
+	DockerImage       string   `json:"dockerImage"`
+	RegistryURL       string   `json:"registryUrl"`
+	Username          string   `json:"username"`
+	ApplicationStatus string   `json:"applicationStatus"`
+	Env               string   `json:"env"`
+	Backups           []Backup `json:"backups"`
 }
 
 // ApplicationInput is the application.create payload. appName is required by

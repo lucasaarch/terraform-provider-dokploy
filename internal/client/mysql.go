@@ -8,19 +8,20 @@ import (
 
 // Mysql is a Dokploy-managed MySQL service.
 type Mysql struct {
-	ID                   string `json:"mysqlId"`
-	Name                 string `json:"name"`
-	AppName              string `json:"appName"`
-	Description          string `json:"description"`
-	EnvironmentID        string `json:"environmentId"`
-	DockerImage          string `json:"dockerImage"`
-	DatabaseName         string `json:"databaseName"`
-	DatabaseUser         string `json:"databaseUser"`
-	DatabasePassword     string `json:"databasePassword"`
-	DatabaseRootPassword string `json:"databaseRootPassword"`
-	ExternalPort         int    `json:"externalPort"`
-	Env                  string `json:"env"`
-	ApplicationStatus    string `json:"applicationStatus"`
+	ID                   string   `json:"mysqlId"`
+	Name                 string   `json:"name"`
+	AppName              string   `json:"appName"`
+	Description          string   `json:"description"`
+	EnvironmentID        string   `json:"environmentId"`
+	DockerImage          string   `json:"dockerImage"`
+	DatabaseName         string   `json:"databaseName"`
+	DatabaseUser         string   `json:"databaseUser"`
+	DatabasePassword     string   `json:"databasePassword"`
+	DatabaseRootPassword string   `json:"databaseRootPassword"`
+	ExternalPort         int      `json:"externalPort"`
+	Env                  string   `json:"env"`
+	ApplicationStatus    string   `json:"applicationStatus"`
+	Backups              []Backup `json:"backups"`
 }
 
 // MysqlInput is the create/update payload.
