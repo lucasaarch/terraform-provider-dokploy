@@ -1,0 +1,1 @@
+terraform import dokploy_gotify_notification.alerts <notificationId>

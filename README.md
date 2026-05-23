@@ -20,6 +20,14 @@ Manage [Dokploy](https://dokploy.com) infrastructure declaratively with Terrafor
 - `dokploy_ssh_key` — SSH key registered at the organization level (used by `dokploy_server`)
 - `dokploy_server` — remote machine registered as a managed worker
 - `dokploy_server_schedule` — cron command on a managed server
+- `dokploy_compose` — Docker Compose stack
+- `dokploy_mount` — bind/volume/file mount on a service
+- `dokploy_port` — published port on an application
+- `dokploy_slack_notification` — Slack notification
+- `dokploy_discord_notification` — Discord notification
+- `dokploy_email_notification` — Email (SMTP) notification
+- `dokploy_telegram_notification` — Telegram notification
+- `dokploy_gotify_notification` — Gotify notification
 
 ## Data sources
 

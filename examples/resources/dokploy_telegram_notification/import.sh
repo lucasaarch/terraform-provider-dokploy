@@ -1,0 +1,1 @@
+terraform import dokploy_telegram_notification.alerts <notificationId>

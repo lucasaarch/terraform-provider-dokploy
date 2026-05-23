@@ -1,0 +1,1 @@
+terraform import dokploy_discord_notification.alerts <notificationId>
