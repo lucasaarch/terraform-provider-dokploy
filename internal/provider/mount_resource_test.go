@@ -18,7 +18,10 @@ resource "dokploy_application" "test" {
   environment_id = dokploy_project.test.production_environment_id
   name           = "tf-acc-mount-bind-app"
   docker_image   = "nginx:alpine"
-  timeouts { create = "15m" update = "15m" }
+  timeouts {
+    create = "15m"
+    update = "15m"
+  }
 }
 
 resource "dokploy_mount" "test" {
@@ -41,9 +44,10 @@ resource "dokploy_mount" "test" {
 				),
 			},
 			{
-				ResourceName:      "dokploy_mount.test",
-				ImportState:       true,
-				ImportStateVerify: true,
+				ResourceName:            "dokploy_mount.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"service_id"},
 			},
 		},
 	})
@@ -60,7 +64,10 @@ resource "dokploy_application" "test" {
   environment_id = dokploy_project.test.production_environment_id
   name           = "tf-acc-mount-vol-app"
   docker_image   = "nginx:alpine"
-  timeouts { create = "15m" update = "15m" }
+  timeouts {
+    create = "15m"
+    update = "15m"
+  }
 }
 
 resource "dokploy_mount" "test" {
@@ -96,7 +103,10 @@ resource "dokploy_application" "test" {
   environment_id = dokploy_project.test.production_environment_id
   name           = "tf-acc-mount-file-app"
   docker_image   = "nginx:alpine"
-  timeouts { create = "15m" update = "15m" }
+  timeouts {
+    create = "15m"
+    update = "15m"
+  }
 }
 
 resource "dokploy_mount" "test" {

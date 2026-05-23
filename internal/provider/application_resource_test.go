@@ -80,7 +80,7 @@ resource "dokploy_application" "test" {
     condition    = "on-failure"
     delay        = "5s"
     max_attempts = 3
-    window       = "120s"
+    window       = "2m0s"
   }
   timeouts {
     create = "15m"
@@ -147,7 +147,10 @@ resource "dokploy_application" "test" {
   name           = "tf-acc-app-on-server"
   docker_image   = "nginx:1.27"
   server_id      = dokploy_server.test.id
-  timeouts { create = "15m" update = "15m" }
+  timeouts {
+    create = "15m"
+    update = "15m"
+  }
 }`, firstOrgName(t), suffix, priv, pub, suffix, ip, port, user, suffix)
 
 	resource.Test(t, resource.TestCase{

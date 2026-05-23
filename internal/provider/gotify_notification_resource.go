@@ -32,6 +32,7 @@ type gotifyNotificationModel struct {
 	ServerURL       types.String `tfsdk:"server_url"`
 	AppToken        types.String `tfsdk:"app_token"`
 	Priority        types.Int64  `tfsdk:"priority"`
+	Decoration      types.Bool   `tfsdk:"decoration"`
 	AppDeploy       types.Bool   `tfsdk:"app_deploy"`
 	AppBuildError   types.Bool   `tfsdk:"app_build_error"`
 	DatabaseBackup  types.Bool   `tfsdk:"database_backup"`
@@ -56,6 +57,7 @@ func (r *gotifyNotificationResource) Schema(_ context.Context, _ resource.Schema
 			"server_url":       schema.StringAttribute{Required: true, MarkdownDescription: "Gotify server URL."},
 			"app_token":        schema.StringAttribute{Required: true, Sensitive: true, MarkdownDescription: "Gotify app token."},
 			"priority":         schema.Int64Attribute{Optional: true, Computed: true, MarkdownDescription: "Notification priority (1-10)."},
+			"decoration":       schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false), MarkdownDescription: "Enable message decoration."},
 			"app_deploy":       schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on application deploy."},
 			"app_build_error":  schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on build error."},
 			"database_backup":  schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on database backup events."},
@@ -63,7 +65,7 @@ func (r *gotifyNotificationResource) Schema(_ context.Context, _ resource.Schema
 			"volume_backup":    schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on volume backup events."},
 			"dokploy_restart":  schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on Dokploy restart."},
 			"docker_cleanup":   schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on Docker cleanup."},
-			"server_threshold": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on server resource threshold breaches."},
+			"server_threshold": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false), MarkdownDescription: "Notify on server resource threshold breaches (Gotify does not support this event; always returns false)."},
 		},
 	}
 }
@@ -81,16 +83,12 @@ func (r *gotifyNotificationResource) Configure(_ context.Context, req resource.C
 }
 
 func (m gotifyNotificationModel) toInput() client.GotifyNotificationInput {
-	var priority *int
-	if !m.Priority.IsNull() && !m.Priority.IsUnknown() {
-		v := int(m.Priority.ValueInt64())
-		priority = &v
-	}
 	return client.GotifyNotificationInput{
-		Name:      m.Name.ValueString(),
-		ServerURL: m.ServerURL.ValueString(),
-		AppToken:  m.AppToken.ValueString(),
-		Priority:  priority,
+		Name:       m.Name.ValueString(),
+		ServerURL:  m.ServerURL.ValueString(),
+		AppToken:   m.AppToken.ValueString(),
+		Priority:   int(m.Priority.ValueInt64()),
+		Decoration: m.Decoration.ValueBool(),
 		EventFlags: client.EventFlags{
 			AppDeploy:       m.AppDeploy.ValueBool(),
 			AppBuildError:   m.AppBuildError.ValueBool(),
@@ -152,9 +150,8 @@ func (r *gotifyNotificationResource) Read(ctx context.Context, req resource.Read
 		if n.Gotify.AppToken != "" {
 			state.AppToken = types.StringValue(n.Gotify.AppToken)
 		}
-		if n.Gotify.Priority != nil {
-			state.Priority = types.Int64Value(int64(*n.Gotify.Priority))
-		}
+		state.Priority = types.Int64Value(int64(n.Gotify.Priority))
+		state.Decoration = types.BoolValue(n.Gotify.Decoration)
 	}
 	state.AppDeploy = types.BoolValue(n.AppDeploy)
 	state.AppBuildError = types.BoolValue(n.AppBuildError)

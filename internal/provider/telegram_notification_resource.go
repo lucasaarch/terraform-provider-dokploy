@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -55,7 +56,7 @@ func (r *telegramNotificationResource) Schema(_ context.Context, _ resource.Sche
 			"name":              schema.StringAttribute{Required: true, MarkdownDescription: "Display name."},
 			"bot_token":         schema.StringAttribute{Required: true, Sensitive: true, MarkdownDescription: "Telegram bot token."},
 			"chat_id":           schema.StringAttribute{Required: true, MarkdownDescription: "Telegram chat or group ID."},
-			"message_thread_id": schema.StringAttribute{Optional: true, MarkdownDescription: "Forum group message thread ID."},
+			"message_thread_id": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString(""), MarkdownDescription: "Forum group message thread ID (empty string if not used)."},
 			"app_deploy":        schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on application deploy."},
 			"app_build_error":   schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on build error."},
 			"database_backup":   schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), MarkdownDescription: "Notify on database backup events."},
@@ -147,9 +148,7 @@ func (r *telegramNotificationResource) Read(ctx context.Context, req resource.Re
 			state.BotToken = types.StringValue(n.Telegram.BotToken)
 		}
 		state.ChatID = types.StringValue(n.Telegram.ChatID)
-		if n.Telegram.MessageThreadID != "" {
-			state.MessageThreadID = types.StringValue(n.Telegram.MessageThreadID)
-		}
+		state.MessageThreadID = types.StringValue(n.Telegram.MessageThreadID)
 	}
 	state.AppDeploy = types.BoolValue(n.AppDeploy)
 	state.AppBuildError = types.BoolValue(n.AppBuildError)

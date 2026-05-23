@@ -41,6 +41,7 @@ type NotificationSlack struct {
 type NotificationDiscord struct {
 	DiscordID  string `json:"discordId"`
 	WebhookURL string `json:"webhookUrl"`
+	Decoration bool   `json:"decoration"`
 }
 
 // NotificationEmail is the embedded email sub-object.
@@ -64,10 +65,11 @@ type NotificationTelegram struct {
 
 // NotificationGotify is the embedded gotify sub-object.
 type NotificationGotify struct {
-	GotifyID  string `json:"gotifyId"`
-	ServerURL string `json:"serverUrl"`
-	AppToken  string `json:"appToken"`
-	Priority  *int   `json:"priority"`
+	GotifyID   string `json:"gotifyId"`
+	ServerURL  string `json:"serverUrl"`
+	AppToken   string `json:"appToken"`
+	Priority   int    `json:"priority"`
+	Decoration bool   `json:"decoration"`
 }
 
 // Notification is the read shape returned by notification.one and notification.all.
@@ -126,16 +128,17 @@ type TelegramNotificationInput struct {
 	Name            string `json:"name,omitempty"`
 	BotToken        string `json:"botToken,omitempty"`
 	ChatID          string `json:"chatId,omitempty"`
-	MessageThreadID string `json:"messageThreadId,omitempty"`
+	MessageThreadID string `json:"messageThreadId"` // required by API even as ""
 	EventFlags
 }
 
 // GotifyNotificationInput is the payload for notification.createGotify / updateGotify.
 type GotifyNotificationInput struct {
-	Name      string `json:"name,omitempty"`
-	ServerURL string `json:"serverUrl,omitempty"`
-	AppToken  string `json:"appToken,omitempty"`
-	Priority  *int   `json:"priority,omitempty"`
+	Name       string `json:"name,omitempty"`
+	ServerURL  string `json:"serverUrl,omitempty"`
+	AppToken   string `json:"appToken,omitempty"`
+	Priority   int    `json:"priority"`   // required by API as a number
+	Decoration bool   `json:"decoration"` // required by API as a boolean
 	EventFlags
 }
 

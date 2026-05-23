@@ -94,7 +94,10 @@ resource "dokploy_postgres" "test" {
   database_name  = "app"
   database_user  = "app"
   server_id      = dokploy_server.test.id
-  timeouts { create = "15m" update = "15m" }
+  timeouts {
+    create = "15m"
+    update = "15m"
+  }
 }`, firstOrgName(t), suffix, priv, pub, suffix, ip, port, user, suffix)
 
 	resource.Test(t, resource.TestCase{

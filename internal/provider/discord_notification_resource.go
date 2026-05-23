@@ -140,8 +140,11 @@ func (r *discordNotificationResource) Read(ctx context.Context, req resource.Rea
 	} else if n.Discord != nil {
 		state.DiscordID = types.StringValue(n.Discord.DiscordID)
 	}
-	if n.Discord != nil && n.Discord.WebhookURL != "" {
-		state.WebhookURL = types.StringValue(n.Discord.WebhookURL)
+	if n.Discord != nil {
+		if n.Discord.WebhookURL != "" {
+			state.WebhookURL = types.StringValue(n.Discord.WebhookURL)
+		}
+		state.Decoration = types.BoolValue(n.Discord.Decoration)
 	}
 	state.AppDeploy = types.BoolValue(n.AppDeploy)
 	state.AppBuildError = types.BoolValue(n.AppBuildError)

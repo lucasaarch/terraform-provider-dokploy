@@ -19,7 +19,10 @@ resource "dokploy_application" "test" {
   environment_id = dokploy_project.test.production_environment_id
   name           = "tf-acc-port-app"
   docker_image   = "nginx:alpine"
-  timeouts { create = "15m" update = "15m" }
+  timeouts {
+    create = "15m"
+    update = "15m"
+  }
 }
 
 resource "dokploy_port" "test" {

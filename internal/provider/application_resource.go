@@ -167,16 +167,49 @@ func healthCheckToObject(ctx context.Context, hc *client.HealthCheckSwarm) (type
 	})
 }
 
+// normalizeDuration parses the given duration string and reformats it to Go's canonical form.
+// Returns the canonical string, or the original string if parsing fails.
+func normalizeDuration(s string) string {
+	if d, err := time.ParseDuration(s); err == nil {
+		return d.String()
+	}
+	return s
+}
+
 // restartPolicyToObject converts *client.RestartPolicySwarm to a types.Object for state storage.
-func restartPolicyToObject(rp *client.RestartPolicySwarm) (types.Object, diag.Diagnostics) {
+// priorState is the prior types.Object value (may be null/unknown); when the API duration
+// values are equivalent to what's stored in priorState, we keep the prior strings to avoid
+// spurious diffs caused by Go's canonical duration format (e.g. "2m0s" vs "120s").
+func restartPolicyToObject(rp *client.RestartPolicySwarm, priorState types.Object) (types.Object, diag.Diagnostics) {
 	if rp == nil {
 		return types.ObjectNull(restartPolicyAttrTypes), nil
 	}
+	apiDelay := time.Duration(rp.Delay).String()
+	apiWindow := time.Duration(rp.Window).String()
+
+	// Preserve prior state duration strings when they are equivalent to the API value.
+	if !priorState.IsNull() && !priorState.IsUnknown() {
+		var prior struct {
+			Condition   types.String `tfsdk:"condition"`
+			Delay       types.String `tfsdk:"delay"`
+			MaxAttempts types.Int64  `tfsdk:"max_attempts"`
+			Window      types.String `tfsdk:"window"`
+		}
+		// Best-effort extraction; ignore errors.
+		_ = priorState.As(context.Background(), &prior, basetypes.ObjectAsOptions{})
+		if normalizeDuration(prior.Delay.ValueString()) == normalizeDuration(apiDelay) && prior.Delay.ValueString() != "" {
+			apiDelay = prior.Delay.ValueString()
+		}
+		if normalizeDuration(prior.Window.ValueString()) == normalizeDuration(apiWindow) && prior.Window.ValueString() != "" {
+			apiWindow = prior.Window.ValueString()
+		}
+	}
+
 	return types.ObjectValue(restartPolicyAttrTypes, map[string]attr.Value{
 		"condition":    types.StringValue(rp.Condition),
-		"delay":        types.StringValue(time.Duration(rp.Delay).String()),
+		"delay":        types.StringValue(apiDelay),
 		"max_attempts": types.Int64Value(int64(rp.MaxAttempts)),
-		"window":       types.StringValue(time.Duration(rp.Window).String()),
+		"window":       types.StringValue(apiWindow),
 	})
 }
 
@@ -245,6 +278,7 @@ func (r *applicationResource) Schema(ctx context.Context, _ resource.SchemaReque
 			"status": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Status of the most recent deployment.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"replicas": schema.Int64Attribute{
 				Optional:            true,
@@ -482,7 +516,7 @@ func (r *applicationResource) Read(ctx context.Context, req resource.ReadRequest
 		}
 	}
 	// RestartPolicy
-	rpObj, rpDiags := restartPolicyToObject(app.RestartPolicySwarm)
+	rpObj, rpDiags := restartPolicyToObject(app.RestartPolicySwarm, state.RestartPolicy)
 	resp.Diagnostics.Append(rpDiags...)
 	if !rpDiags.HasError() {
 		if app.RestartPolicySwarm != nil || !state.RestartPolicy.IsNull() {
