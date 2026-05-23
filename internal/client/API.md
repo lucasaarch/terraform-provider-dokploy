@@ -2339,3 +2339,733 @@ The probe sent `{"name":"tf-probe","appName":"tf-probe","environmentId":"nope","
 **All 5 database routers accept `serverId`.** The field is present on the `*.one` responses as `"serverId": null` when unused (confirmed in v0.3 probes — see DB sections above).
 
 **Implementation note:** Add an Optional `server_id` attribute (ForceNew) to each of the five database resource schemas. The field maps to `serverId` in the create/update body. Since the DB `*.one` endpoints already return `serverId`, the Read method can populate it from the API response without special handling.
+
+---
+
+## compose.*
+
+> Verified against live instance on 2026-05-23.
+
+Docker Compose stacks managed by Dokploy. Stacks use `composeId` as their primary key and `composeStatus` (NOT `applicationStatus`) as their deployment status field.
+
+**Important differences from application:**
+- Status field is `composeStatus`, not `applicationStatus`.
+- Default `sourceType` on create is `"github"` — must be overridden to `"raw"` for inline YAML.
+- `compose.update` returns the **full updated compose object** (not `true`).
+- `compose.deploy` returns `{"success": true, "message": "Deployment queued", "composeId": "..."}` (not an empty body).
+- Delete verb is `compose.delete` (not `compose.remove` — `.remove` returns 404).
+- `compose.one` includes `backups: []` and `mounts: []` arrays.
+
+---
+
+### `GET /api/compose.one?composeId=<id>`
+
+Returns a single compose stack with full details.
+
+**Query params:** `composeId` (string, required).
+
+**Response:** `200 application/json` — full compose object.
+
+```json
+{
+  "composeId": "tKexKC4qIBasakvFUS2QY",
+  "name": "tf-probe-compose",
+  "appName": "tf-probe-compose-m1wg2s",
+  "description": null,
+  "env": "TEST_VAR=hello",
+  "composeFile": "version: \"3\"\nservices:\n  hello:\n    image: nginx:alpine\n",
+  "refreshToken": "J3EILVMLQMg-vYbDiubRi",
+  "sourceType": "raw",
+  "composeType": "docker-compose",
+  "repository": null,
+  "owner": null,
+  "branch": null,
+  "autoDeploy": true,
+  "composePath": "./docker-compose.yml",
+  "suffix": "",
+  "randomize": false,
+  "isolatedDeployment": false,
+  "isolatedDeploymentsVolume": false,
+  "triggerType": "push",
+  "composeStatus": "done",
+  "environmentId": "vPN6IgAMIeZjk0Fh1288H",
+  "createdAt": "2026-05-23T04:51:13.021Z",
+  "serverId": null,
+  "environment": { "...": "..." },
+  "backups": [],
+  "mounts": [],
+  "domains": [],
+  "deployments": [],
+  "server": null
+}
+```
+
+**Complete key list on compose object:**
+`appName`, `autoDeploy`, `backups`, `bitbucket`, `bitbucketBranch`, `bitbucketId`, `bitbucketOwner`, `bitbucketRepository`, `bitbucketRepositorySlug`, `branch`, `command`, `composeFile`, `composeId`, `composePath`, `composeStatus`, `composeType`, `createdAt`, `customGitBranch`, `customGitSSHKeyId`, `customGitUrl`, `deployments`, `description`, `domains`, `enableSubmodules`, `env`, `environment`, `environmentId`, `gitea`, `giteaBranch`, `giteaId`, `giteaOwner`, `giteaRepository`, `github`, `githubId`, `gitlab`, `gitlabBranch`, `gitlabId`, `gitlabOwner`, `gitlabPathNamespace`, `gitlabProjectId`, `gitlabRepository`, `hasGitProviderAccess`, `isolatedDeployment`, `isolatedDeploymentsVolume`, `mounts`, `name`, `owner`, `randomize`, `refreshToken`, `repository`, `server`, `serverId`, `sourceType`, `suffix`, `triggerType`, `unauthorizedProvider`, `watchPaths`
+
+**`composeStatus` values:** Same as `applicationStatus` — `idle`, `running`, `done`, `error`, `stopped`.
+
+---
+
+### `POST /api/compose.create`
+
+Creates a new compose stack.
+
+**Request body:**
+```json
+{
+  "name": "my-stack",
+  "appName": "my-stack",
+  "environmentId": "vPN6IgAMIeZjk0Fh1288H"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `appName` | string | yes | Docker stack name (auto-suffixed with random chars, e.g. `my-stack-m1wg2s`) |
+| `environmentId` | string | yes | Parent environment ID |
+| `description` | string | no | Optional description |
+| `serverId` | string | no | Deploy on a remote server; omit for Dokploy host |
+
+**Response:** `200 application/json` — the full compose object. `sourceType` will be `"github"` by default; `composeFile` will be `""`.
+
+**Note:** After create, always call `compose.update` to set `sourceType: "raw"` and `composeFile` before deploying.
+
+---
+
+### `POST /api/compose.update`
+
+Updates a compose stack's configuration.
+
+**Request body:**
+```json
+{
+  "composeId": "tKexKC4qIBasakvFUS2QY",
+  "name": "my-stack",
+  "sourceType": "raw",
+  "composeFile": "version: \"3\"\nservices:\n  hello:\n    image: nginx:alpine\n",
+  "env": "FOO=bar\nBAZ=qux"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `composeId` | string | yes | Compose stack ID |
+| `name` | string | no | New display name |
+| `description` | string | no | New description |
+| `sourceType` | string | no | `"raw"` for inline YAML; `"github"`, `"gitlab"`, etc. for git sources |
+| `composeFile` | string | no | Inline YAML content (when `sourceType = "raw"`) |
+| `env` | string | no | Env vars (newline-separated KEY=value pairs) |
+
+**Response:** `200 application/json` — the **full updated compose object** (unlike `application.update` which returns `true`).
+
+---
+
+### `POST /api/compose.deploy`
+
+Triggers an asynchronous deployment of the stack.
+
+**Request body:**
+```json
+{
+  "composeId": "tKexKC4qIBasakvFUS2QY"
+}
+```
+
+**Response:** `200 application/json`
+```json
+{"success": true, "message": "Deployment queued", "composeId": "tKexKC4qIBasakvFUS2QY"}
+```
+
+Poll `compose.one` until `composeStatus` is `done` or `error`.
+
+---
+
+### `POST /api/compose.delete`
+
+Deletes a compose stack. **Endpoint is `.delete`** (`.remove` returns 404).
+
+**Request body:**
+```json
+{
+  "composeId": "tKexKC4qIBasakvFUS2QY"
+}
+```
+
+**Response:** `200 application/json` — the deleted compose object.
+
+---
+
+## mounts.*
+
+> Verified against live instance on 2026-05-23.
+
+Mounts (bind, volume, or file) can be attached to any Dokploy service type. The router uses **plural** `mounts.*` (not `mount.*`). Each mount is identified by `mountId`.
+
+**Important design notes:**
+- `mounts.create` response does NOT include `serviceId`. Instead it has separate nullable fields for each service type: `applicationId`, `composeId`, `postgresId`, `mysqlId`, `mariadbId`, `mongoId`, `redisId`, `libsqlId`.
+- Despite those per-service fields being null in responses, the `serviceId` field is correctly required on create and the backend routes it to the right service.
+- The response also includes a `serviceType` field (`"application"`, `"compose"`, `"postgres"`, etc.) indicating which service type owns the mount.
+- `mounts.update` accepts `mountId` + any writable fields and returns the full mount object.
+- Delete verb is `mounts.remove` (`.delete` returns 404).
+- `mounts.one` returns the full mount object plus embedded service sub-objects (all null except the owning service, which is also null if not populated by the query).
+
+**Per-type required fields:**
+- `bind`: `hostPath` is the correct field name. Server does NOT enforce it as required — a bind mount can be created with null `hostPath`. The Terraform provider should validate this at plan time.
+- `volume`: `volumeName` is the correct field name. Server does NOT enforce it as required either.
+- `file`: `content` is the correct field name (not `filePath` — `filePath` is a separate null field in the response). Server does NOT enforce `content` as required. The Terraform provider should validate at plan time.
+
+---
+
+### `GET /api/mounts.one?mountId=<id>`
+
+Returns a single mount with embedded service sub-objects.
+
+**Query params:** `mountId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "mountId": "jn_e_BwMYE47qQnxOrv_l",
+  "type": "bind",
+  "hostPath": "/var/probe",
+  "volumeName": null,
+  "filePath": null,
+  "content": null,
+  "serviceType": "application",
+  "mountPath": "/tmp/bind",
+  "applicationId": null,
+  "composeId": null,
+  "libsqlId": null,
+  "mariadbId": null,
+  "mongoId": null,
+  "mysqlId": null,
+  "postgresId": null,
+  "redisId": null,
+  "application": null,
+  "compose": null,
+  "libsql": null,
+  "mariadb": null,
+  "mongo": null,
+  "mysql": null,
+  "postgres": null,
+  "redis": null
+}
+```
+
+**Note on `applicationId` being null:** Despite the mount being attached to an application, the individual service ID fields in the response can be null. Use `serviceType` + `mountId` as the canonical identifiers.
+
+---
+
+### `POST /api/mounts.create`
+
+Creates a mount attached to a service.
+
+**Request body:**
+```json
+{
+  "type": "bind",
+  "mountPath": "/tmp/bind",
+  "serviceId": "88J5gWT57SBgtZ9ro4Y94",
+  "hostPath": "/var/probe"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `serviceId` | string | yes | ID of the owning service (application, compose, postgres, etc.) |
+| `type` | string | yes | `"bind"`, `"volume"`, or `"file"` |
+| `mountPath` | string | yes | Path inside the container |
+| `hostPath` | string | **required for bind** (server does not validate, validate at plan time) | Host filesystem path |
+| `volumeName` | string | **required for volume** (server does not validate, validate at plan time) | Docker volume name |
+| `content` | string | **required for file** (server does not validate, validate at plan time) | File content string |
+
+**Response:** `200 application/json` — the created mount object (same shape as `mounts.one` without embedded service sub-objects).
+
+---
+
+### `POST /api/mounts.update`
+
+Updates a mount.
+
+**Request body:**
+```json
+{
+  "mountId": "jn_e_BwMYE47qQnxOrv_l",
+  "mountPath": "/tmp/bind-updated",
+  "hostPath": "/var/probe-new"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `mountId` | string | yes | Mount ID |
+| `mountPath` | string | no | New container path |
+| `hostPath` | string | no | New host path (bind only) |
+| `volumeName` | string | no | New volume name (volume only) |
+| `content` | string | no | New file content (file only) |
+
+**Response:** `200 application/json` — the full updated mount object (with embedded service sub-objects, all null).
+
+---
+
+### `POST /api/mounts.remove`
+
+Deletes a mount. **Endpoint is `.remove`** (`.delete` returns 404).
+
+**Request body:**
+```json
+{
+  "mountId": "jn_e_BwMYE47qQnxOrv_l"
+}
+```
+
+**Response:** `200 application/json` — the deleted mount object.
+
+---
+
+## port.*
+
+> Verified against live instance on 2026-05-23.
+
+Port mappings for applications. Each port is identified by `portId`. Note: the router uses singular `port.*` (not `ports.*`), but the `application.one` response embeds ports in a `ports[]` array.
+
+**Key behaviors:**
+- `port.create` and `port.update` both return the full port object.
+- Delete verb is `port.delete` (`.remove` returns 404).
+- `protocol` defaults to `"tcp"` if omitted on create.
+- `publishMode` defaults to `"ingress"` and is always present in responses (not a user-settable field from Terraform).
+
+---
+
+### `GET /api/port.one?portId=<id>`
+
+Returns a single port mapping with its full parent application embedded.
+
+**Query params:** `portId` (string, required).
+
+**Response:** `200 application/json`
+
+```json
+{
+  "portId": "xaf-ZmbpqUVmFoWZmfaj2",
+  "publishedPort": 8080,
+  "publishMode": "ingress",
+  "targetPort": 80,
+  "protocol": "tcp",
+  "applicationId": "88J5gWT57SBgtZ9ro4Y94",
+  "application": { "...": "full application object" }
+}
+```
+
+---
+
+### `POST /api/port.create`
+
+Creates a port mapping for an application.
+
+**Request body:**
+```json
+{
+  "applicationId": "88J5gWT57SBgtZ9ro4Y94",
+  "publishedPort": 8080,
+  "targetPort": 80,
+  "protocol": "tcp"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `applicationId` | string | yes | Application ID |
+| `publishedPort` | integer | yes | Host port to publish |
+| `targetPort` | integer | yes | Container port to target |
+| `protocol` | string | no | `"tcp"` (default) or `"udp"` |
+
+**Response:** `200 application/json` — the created port object (without `application` sub-object):
+
+```json
+{
+  "portId": "xaf-ZmbpqUVmFoWZmfaj2",
+  "publishedPort": 8080,
+  "publishMode": "ingress",
+  "targetPort": 80,
+  "protocol": "tcp",
+  "applicationId": "88J5gWT57SBgtZ9ro4Y94"
+}
+```
+
+---
+
+### `POST /api/port.update`
+
+Updates a port mapping.
+
+**Request body:**
+```json
+{
+  "portId": "xaf-ZmbpqUVmFoWZmfaj2",
+  "publishedPort": 8080,
+  "targetPort": 80,
+  "protocol": "tcp"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `portId` | string | yes | Port ID |
+| `publishedPort` | integer | no | New host port |
+| `targetPort` | integer | no | New container port |
+| `protocol` | string | no | `"tcp"` or `"udp"` |
+
+**Response:** `200 application/json` — the full updated port object (same shape as create response).
+
+---
+
+### `POST /api/port.delete`
+
+Deletes a port mapping. **Endpoint is `.delete`** (`.remove` returns 404).
+
+**Request body:**
+```json
+{
+  "portId": "xaf-ZmbpqUVmFoWZmfaj2"
+}
+```
+
+**Response:** `200 application/json` — the deleted port object.
+
+---
+
+## notification.*
+
+> Verified against live instance on 2026-05-23.
+
+Notifications are configured at the organization level. There are 5 supported notification types: `slack`, `discord`, `email`, `telegram`, `gotify`. Each type has its own create and update endpoint. There is NO universal `notification.create` or `notification.update` — these endpoints return 404.
+
+**Critical behaviors:**
+- `notification.createSlack` (and all other type-specific creates) returns HTTP 200 with **empty body**. The `notificationId` must be obtained from `notification.all` after creation (match by `name` + `createdAt`).
+- Each type-specific update (`notification.updateSlack`, `notification.updateDiscord`, etc.) requires both `notificationId` AND the type-specific sub-ID (`slackId`, `discordId`, etc.) from the `notification.one` response. Returns empty body on success.
+- Delete verb is `notification.remove` (`.delete` returns 404). Returns the full deleted notification object.
+- `notification.one` and `notification.all` return secrets in **plaintext** — `webhookUrl`, `botToken`, and email credentials are fully visible. The Terraform provider should treat these as sensitive and use state values for drift detection after the first read.
+
+---
+
+### `GET /api/notification.all`
+
+Returns all notifications in the organization.
+
+**Request:** no body, no query params.
+
+**Response:** `200 application/json` — array of notification objects.
+
+```json
+[
+  {
+    "notificationId": "lkvThNFU1wuNjcqaIP7xr",
+    "name": "my-slack",
+    "appDeploy": true,
+    "appBuildError": true,
+    "databaseBackup": true,
+    "volumeBackup": true,
+    "dokployRestart": true,
+    "dokployBackup": true,
+    "dockerCleanup": true,
+    "serverThreshold": true,
+    "notificationType": "slack",
+    "createdAt": "2026-05-23T04:52:52.999Z",
+    "slackId": "dT9IdTYOobVyY7WN5Qrfg",
+    "telegramId": null,
+    "discordId": null,
+    "emailId": null,
+    "resendId": null,
+    "gotifyId": null,
+    "ntfyId": null,
+    "mattermostId": null,
+    "customId": null,
+    "larkId": null,
+    "pushoverId": null,
+    "teamsId": null,
+    "organizationId": "JYzDaUdW-hC0EX785HuXV",
+    "slack": {
+      "slackId": "dT9IdTYOobVyY7WN5Qrfg",
+      "webhookUrl": "https://hooks.slack.com/services/T0/B0/X",
+      "channel": "#test"
+    },
+    "telegram": null,
+    "discord": null,
+    "email": null,
+    "resend": null,
+    "gotify": null,
+    "ntfy": null,
+    "mattermost": null,
+    "custom": null,
+    "lark": null,
+    "pushover": null,
+    "teams": null
+  }
+]
+```
+
+---
+
+### `GET /api/notification.one?notificationId=<id>`
+
+Returns a single notification with full type-specific credentials.
+
+**Query params:** `notificationId` (string, required).
+
+**Response:** Same shape as a single element from `notification.all` (including the type sub-object with secrets in plaintext).
+
+**Secret handling:** `webhookUrl` (Slack/Discord/Gotify), `botToken` (Telegram), and email credentials are returned in plaintext. The Terraform provider must store these in state and skip drift detection for secrets (use `state_value` where the API might not echo exactly what was set).
+
+---
+
+### `POST /api/notification.createSlack`
+
+Creates a Slack notification.
+
+**Request body:**
+```json
+{
+  "name": "my-slack",
+  "webhookUrl": "https://hooks.slack.com/services/T0/B0/X",
+  "channel": "#alerts",
+  "appDeploy": true,
+  "appBuildError": true,
+  "databaseBackup": true,
+  "volumeBackup": true,
+  "dokployRestart": true,
+  "dokployBackup": true,
+  "dockerCleanup": true,
+  "serverThreshold": true
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | yes | Display name |
+| `webhookUrl` | string | yes | Slack incoming webhook URL |
+| `channel` | string | yes | Slack channel (e.g. `"#alerts"`) |
+| `appDeploy` | boolean | yes | Notify on application deploy |
+| `appBuildError` | boolean | yes | Notify on build error |
+| `databaseBackup` | boolean | yes | Notify on database backup |
+| `volumeBackup` | boolean | yes | Notify on volume backup |
+| `dokployRestart` | boolean | yes | Notify on Dokploy restart |
+| `dokployBackup` | boolean | yes | Notify on Dokploy backup |
+| `dockerCleanup` | boolean | yes | Notify on Docker cleanup |
+| `serverThreshold` | boolean | yes | Notify on server threshold alerts |
+
+**Response:** HTTP 200 with **empty body**. Obtain the `notificationId` from `notification.all` after creation.
+
+---
+
+### `POST /api/notification.createDiscord`
+
+Creates a Discord notification.
+
+**Additional fields vs Slack:** `webhookUrl` (required), `decoration` (optional string).
+
+**Response:** HTTP 200 with **empty body**.
+
+---
+
+### `POST /api/notification.createEmail`
+
+Creates an Email notification.
+
+**Additional fields vs Slack:** `smtpServer` (required), `smtpPort` (required integer), `username` (required), `password` (required), `fromAddress` (required), `toAddresses` (required, array of strings).
+
+**Response:** HTTP 200 with **empty body**.
+
+---
+
+### `POST /api/notification.createTelegram`
+
+Creates a Telegram notification.
+
+**Additional fields vs Slack:** `botToken` (required), `chatId` (required), `messageThreadId` (optional).
+
+**Response:** HTTP 200 with **empty body**.
+
+---
+
+### `POST /api/notification.createGotify`
+
+Creates a Gotify notification.
+
+**Additional fields vs Slack:** `serverUrl` (required), `appToken` (required), `priority` (optional integer), `decoration` (optional string).
+
+**Response:** HTTP 200 with **empty body**.
+
+---
+
+### `POST /api/notification.updateSlack`
+
+Updates a Slack notification. Requires both the `notificationId` AND `slackId` (the type-specific sub-ID from `notification.one`'s `slack.slackId` field).
+
+**Request body:**
+```json
+{
+  "notificationId": "lkvThNFU1wuNjcqaIP7xr",
+  "slackId": "dT9IdTYOobVyY7WN5Qrfg",
+  "name": "renamed-slack",
+  "webhookUrl": "https://hooks.slack.com/services/T0/B0/Y",
+  "channel": "#alerts",
+  "appDeploy": true,
+  "appBuildError": true,
+  "databaseBackup": true,
+  "volumeBackup": true,
+  "dokployRestart": true,
+  "dokployBackup": true,
+  "dockerCleanup": true,
+  "serverThreshold": true
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `notificationId` | string | yes | Notification ID |
+| `slackId` | string | yes | Type-specific sub-ID from `notification.one`'s `slack.slackId` field |
+| All create fields | — | yes | Same as `createSlack` |
+
+**Response:** HTTP 200 with **empty body**.
+
+---
+
+### `POST /api/notification.updateDiscord`
+
+Same pattern as `updateSlack` but requires `discordId` (from `notification.one`'s `discord.discordId`).
+
+---
+
+### `POST /api/notification.updateEmail`
+
+Requires `emailId` (from `notification.one`'s `email.emailId`).
+
+---
+
+### `POST /api/notification.updateTelegram`
+
+Requires `telegramId` (from `notification.one`'s `telegram.telegramId`).
+
+---
+
+### `POST /api/notification.updateGotify`
+
+Requires `gotifyId` (from `notification.one`'s `gotify.gotifyId`).
+
+---
+
+### `POST /api/notification.remove`
+
+Deletes a notification. **Endpoint is `.remove`** (`.delete` returns 404).
+
+**Request body:**
+```json
+{
+  "notificationId": "lkvThNFU1wuNjcqaIP7xr"
+}
+```
+
+**Response:** `200 application/json` — the deleted notification object (without type sub-objects).
+
+---
+
+## application.* addendum: Swarm advanced fields
+
+> Verified against live instance on 2026-05-23.
+
+`application.update` accepts three additional fields for Docker Swarm mode deployments:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `replicas` | integer | Number of service replicas; defaults to `1` |
+| `healthCheckSwarm` | object\|null | Docker health check config (see shape below) |
+| `restartPolicySwarm` | object\|null | Docker restart policy config (see shape below) |
+
+Both swarm fields are `null` by default and are returned as `null` by `application.one` when not set.
+
+### `healthCheckSwarm` shape
+
+Fields use **PascalCase** matching the Docker Engine API. Durations are **nanosecond integers** (NOT Go-style "30s" strings).
+
+```json
+{
+  "Test": ["CMD", "echo", "hi"],
+  "Interval": 30000000000,
+  "Timeout": 10000000000,
+  "Retries": 3,
+  "StartPeriod": 60000000000
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `Test` | string[] | Health check command array. `["CMD", ...]` for shell-escaped; `["CMD-SHELL", "..."]` for shell string |
+| `Interval` | integer | Check interval in **nanoseconds** (30s = `30000000000`) |
+| `Timeout` | integer | Check timeout in **nanoseconds** (10s = `10000000000`) |
+| `Retries` | integer | Number of consecutive failures before marking unhealthy |
+| `StartPeriod` | integer | Grace period in **nanoseconds** (60s = `60000000000`) |
+
+### `restartPolicySwarm` shape
+
+```json
+{
+  "Condition": "on-failure",
+  "Delay": 5000000000,
+  "MaxAttempts": 3,
+  "Window": 120000000000
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `Condition` | string | One of `"none"`, `"on-failure"`, `"any"` |
+| `Delay` | integer | Delay between restart attempts in **nanoseconds** (5s = `5000000000`) |
+| `MaxAttempts` | integer | Maximum restart attempts before giving up |
+| `Window` | integer | Evaluation window in **nanoseconds** (120s = `120000000000`) |
+
+---
+
+## backup.* addendum: compose and web-server types
+
+> Verified against live instance on 2026-05-23.
+
+### compose backups
+
+`databaseType: "compose"` is **NOT supported** by the API. The Zod schema only accepts:
+`"postgres"` | `"mariadb"` | `"mysql"` | `"mongo"` | `"web-server"` | `"libsql"`
+
+Attempting `databaseType: "compose"` returns HTTP 400:
+```json
+{"fieldErrors": {"databaseType": ["Invalid option: expected one of \"postgres\"|\"mariadb\"|\"mysql\"|\"mongo\"|\"web-server\"|\"libsql\""]}}
+```
+
+**Conclusion:** Compose backups are not supported by the Dokploy backup API. The `backupType: "compose"` field visible on `backup.one` response objects is an internal field set for other purposes and cannot be created via `backup.create`. Do NOT add compose to the `database_type` enum on `dokploy_backup`.
+
+### web-server (application) backups
+
+`databaseType: "web-server"` IS accepted. The `database` field must be set to the `applicationId`. There is no typed ID field for web-server (unlike postgres/mysql/etc which require `postgresId`/`mysqlId`).
+
+**Request body for web-server backup:**
+```json
+{
+  "schedule": "0 3 * * *",
+  "prefix": "app-backups/",
+  "destinationId": "FwQFgPCZe4wKraiAd_dyd",
+  "database": "<applicationId>",
+  "databaseType": "web-server"
+}
+```
+
+Optional: pass `applicationId` as an additional field (the server accepts it without error).
+
+**Response:** HTTP 200 with **empty body** (same as other backup creates).
+
+**V0.3 limitation — confirmed:** `application.one` does NOT include a `backups` key. Unlike postgres/mysql/mariadb/mongo which return `backups: []`, the application object has no backup-related keys whatsoever. There is no API endpoint to list web-server backups by application ID (`backup.listByApplicationId`, `backup.getByApplicationId`, etc. all return 404). The `backup.all` endpoint also does not exist (404).
+
+**Implication for the Terraform provider:** The `dokploy_backup` resource for `database_type = "web-server"` cannot implement Read (cannot fetch existing backup by applicationId). The resource will always show as "created" after `terraform apply` but will be unable to detect drift or confirm the backup ID. This is a known API limitation — document in the resource schema and skip Read for web-server type, or treat it as write-only.
+
+**Finding:** The existing v0.3 `listBackupsForResource` function in `backup.go` uses the parent resource's `.one` endpoint (e.g. `postgres.one`) to find backups. Since `application.one` has no `backups[]` field, the web-server backup type cannot be listed and the v0.3 limitation stands for v0.5 as well. No fix is possible without an API change.
