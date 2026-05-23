@@ -99,6 +99,7 @@ func (p *dokployProvider) Resources(_ context.Context) []func() resource.Resourc
 		NewEnvironmentResource,
 		NewApplicationResource,
 		NewDomainResource,
+		NewPostgresResource,
 	}
 }
 
