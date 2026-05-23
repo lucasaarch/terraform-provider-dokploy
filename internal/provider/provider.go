@@ -111,6 +111,14 @@ func (p *dokployProvider) Resources(_ context.Context) []func() resource.Resourc
 		NewSshKeyResource,
 		NewServerResource,
 		NewServerScheduleResource,
+		NewComposeResource,
+		NewMountResource,
+		NewPortResource,
+		NewSlackNotificationResource,
+		NewDiscordNotificationResource,
+		NewEmailNotificationResource,
+		NewTelegramNotificationResource,
+		NewGotifyNotificationResource,
 	}
 }
 
