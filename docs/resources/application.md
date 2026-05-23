@@ -45,6 +45,7 @@ resource "dokploy_application" "api" {
 - `registry_password` (String, Sensitive) Registry password. Not returned by the API; drift on this field is not detected.
 - `registry_url` (String) Private registry URL. Omit for public images.
 - `registry_username` (String, Sensitive) Registry username.
+- `server_id` (String) Managed server (`dokploy_server.x.id`) the application runs on. Omit to run on the Dokploy host. Changing this forces replacement.
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
 
 ### Read-Only

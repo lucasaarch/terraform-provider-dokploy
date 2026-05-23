@@ -17,6 +17,9 @@ Manage [Dokploy](https://dokploy.com) infrastructure declaratively with Terrafor
 - `dokploy_backup` — scheduled backup of a database (`postgres`, `mysql`, `mariadb`, `mongo`)
 - `dokploy_application_schedule` — cron command inside an application container
 - `dokploy_host_schedule` — cron command on the Dokploy host
+- `dokploy_ssh_key` — SSH key registered at the organization level (used by `dokploy_server`)
+- `dokploy_server` — remote machine registered as a managed worker
+- `dokploy_server_schedule` — cron command on a managed server
 
 ## Data sources
 

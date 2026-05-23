@@ -40,6 +40,7 @@ resource "dokploy_postgres" "db" {
 - `description` (String) Description. Note: once set, removing this attribute does not clear it on the server.
 - `env` (Map of String) Extra environment variables.
 - `external_port` (Number) Host port to expose the database on. Omit to keep internal-only.
+- `server_id` (String) Managed server (`dokploy_server.x.id`) the database runs on. Omit to run on the Dokploy host. Changing this forces replacement.
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
 
 ### Read-Only

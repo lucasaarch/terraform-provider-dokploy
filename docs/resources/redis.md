@@ -35,6 +35,7 @@ resource "dokploy_redis" "cache" {
 - `description` (String) Description. Once set, removing this attribute does not clear it on the server.
 - `env` (Map of String) Extra environment variables.
 - `external_port` (Number) Host port to expose.
+- `server_id` (String) Managed server (`dokploy_server.x.id`) the cache runs on. Omit to run on the Dokploy host. Changing this forces replacement.
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
 
 ### Read-Only
