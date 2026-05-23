@@ -3,12 +3,16 @@ package provider
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"math/big"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"golang.org/x/crypto/ssh"
 )
 
 // Default values shared by every database resource's deploy lifecycle.
@@ -66,6 +70,33 @@ func resolvePassword(plan types.String) string {
 		return generatePassword()
 	}
 	return plan.ValueString()
+}
+
+// generateSSHKeyPair generates a 4096-bit RSA SSH key pair. The private key is
+// PEM-encoded (PKCS#1, "RSA PRIVATE KEY"); the public key is OpenSSH-format
+// ("ssh-rsa AAAA... <comment>\n"). Used by dokploy_ssh_key when the user
+// omits the key inputs.
+func generateSSHKeyPair(comment string) (privatePEM, publicOpenSSH string, err error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return "", "", fmt.Errorf("generating RSA key: %w", err)
+	}
+	privBytes := x509.MarshalPKCS1PrivateKey(priv)
+	privatePEM = string(pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: privBytes,
+	}))
+
+	pub, err := ssh.NewPublicKey(&priv.PublicKey)
+	if err != nil {
+		return "", "", fmt.Errorf("encoding public key: %w", err)
+	}
+	publicOpenSSH = strings.TrimRight(string(ssh.MarshalAuthorizedKey(pub)), "\n")
+	if comment != "" {
+		publicOpenSSH += " " + comment
+	}
+	publicOpenSSH += "\n"
+	return privatePEM, publicOpenSSH, nil
 }
 
 // deployAndWait triggers a deploy via deployFn, then polls statusFn at the

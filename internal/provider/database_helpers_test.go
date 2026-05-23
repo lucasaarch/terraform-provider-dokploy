@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,5 +85,38 @@ func TestDeployAndWait_DeployFnError(t *testing.T) {
 	err := deployAndWait(context.Background(), deployFn, statusFn, 1*time.Millisecond, 5*time.Second)
 	if err == nil || err.Error() != "triggering deploy: boom" {
 		t.Errorf("err = %v, want triggering deploy: boom", err)
+	}
+}
+
+func TestGenerateSSHKeyPair_Format(t *testing.T) {
+	priv, pub, err := generateSSHKeyPair("test-key")
+	if err != nil {
+		t.Fatalf("generateSSHKeyPair() error = %v", err)
+	}
+	if !strings.HasPrefix(priv, "-----BEGIN RSA PRIVATE KEY-----") {
+		t.Errorf("private key prefix wrong: %q", priv[:64])
+	}
+	if !strings.HasSuffix(strings.TrimRight(priv, "\n"), "-----END RSA PRIVATE KEY-----") {
+		t.Errorf("private key suffix wrong")
+	}
+	if !strings.HasPrefix(pub, "ssh-rsa ") {
+		t.Errorf("public key prefix wrong: %q", pub[:32])
+	}
+	if !strings.Contains(pub, "test-key") {
+		t.Errorf("public key missing name comment: %q", pub)
+	}
+}
+
+func TestGenerateSSHKeyPair_Unique(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 5; i++ {
+		priv, _, err := generateSSHKeyPair("k")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[priv] {
+			t.Fatal("duplicate private key generated")
+		}
+		seen[priv] = true
 	}
 }
