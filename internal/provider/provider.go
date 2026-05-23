@@ -109,6 +109,7 @@ func (p *dokployProvider) Resources(_ context.Context) []func() resource.Resourc
 		NewApplicationScheduleResource,
 		NewHostScheduleResource,
 		NewSshKeyResource,
+		NewServerResource,
 	}
 }
 
